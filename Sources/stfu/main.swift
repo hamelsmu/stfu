@@ -1,0 +1,1555 @@
+import AppKit
+import ApplicationServices
+import CoreAudio
+import Foundation
+
+struct AudioProcess: Hashable {
+    let objectID: AudioObjectID
+    let pid: pid_t
+    let bundleID: String?
+    let name: String
+}
+
+struct CommandResult {
+    let status: Int32
+    let output: String
+    let error: String
+}
+
+enum STFUError: Error, CustomStringConvertible {
+    case audioStatus(OSStatus, String)
+    case commandFailed(String)
+
+    var description: String {
+        switch self {
+        case let .audioStatus(status, context):
+            return "\(context): CoreAudio returned \(status)"
+        case let .commandFailed(message):
+            return message
+        }
+    }
+}
+
+let usage = """
+stfu: close the macOS app or browser tab that is currently producing audio
+
+Usage:
+  stfu [--dry-run] [--list] [--all] [--verbose]
+  stfu --doctor
+  stfu --request-accessibility
+
+Options:
+  --dry-run                Print what would be closed.
+  --list                   List processes CoreAudio says are producing output.
+  --all                    Close every detected audio producer, not just the first.
+  --bundle-id ID           Only act on this bundle id, including helper processes.
+  --verbose                Print extra detail while looking for browser tabs.
+  --doctor                 Check browser support and permissions.
+  --request-accessibility  Ask macOS for Accessibility permission.
+  -h, --help               Show this help.
+"""
+
+struct Options {
+    var dryRun = false
+    var list = false
+    var all = false
+    var verbose = false
+    var doctor = false
+    var requestAccessibility = false
+    var bundleID: String?
+}
+
+func parseOptions(_ args: [String]) -> Options? {
+    var options = Options()
+    var index = 0
+    while index < args.count {
+        let arg = args[index]
+        switch arg {
+        case "--dry-run":
+            options.dryRun = true
+        case "--list":
+            options.list = true
+        case "--all":
+            options.all = true
+        case "--bundle-id":
+            index += 1
+            guard index < args.count else {
+                fputs("--bundle-id requires a value\n\n\(usage)\n", stderr)
+                return nil
+            }
+            options.bundleID = args[index]
+        case "--verbose":
+            options.verbose = true
+        case "--doctor":
+            options.doctor = true
+        case "--request-accessibility":
+            options.requestAccessibility = true
+        case "-h", "--help":
+            print(usage)
+            exit(0)
+        default:
+            fputs("Unknown argument: \(arg)\n\n\(usage)\n", stderr)
+            return nil
+        }
+        index += 1
+    }
+    return options
+}
+
+func propertyAddress(
+    _ selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
+) -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: scope,
+        mElement: kAudioObjectPropertyElementMain
+    )
+}
+
+func audioObjectIDs(
+    objectID: AudioObjectID,
+    selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
+) throws -> [AudioObjectID] {
+    var address = propertyAddress(selector, scope: scope)
+    var size: UInt32 = 0
+    var status = AudioObjectGetPropertyDataSize(objectID, &address, 0, nil, &size)
+    guard status == noErr else {
+        throw STFUError.audioStatus(status, "Unable to read property size")
+    }
+    guard size > 0 else {
+        return []
+    }
+
+    let count = Int(size) / MemoryLayout<AudioObjectID>.size
+    var values = Array(repeating: AudioObjectID(0), count: count)
+    status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &values)
+    guard status == noErr else {
+        throw STFUError.audioStatus(status, "Unable to read object IDs")
+    }
+    return values
+}
+
+func audioUInt32(
+    objectID: AudioObjectID,
+    selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
+) throws -> UInt32 {
+    var address = propertyAddress(selector, scope: scope)
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value)
+    guard status == noErr else {
+        throw STFUError.audioStatus(status, "Unable to read UInt32 property")
+    }
+    return value
+}
+
+func audioPID(objectID: AudioObjectID) throws -> pid_t {
+    var address = propertyAddress(kAudioProcessPropertyPID)
+    var value = pid_t(0)
+    var size = UInt32(MemoryLayout<pid_t>.size)
+    let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value)
+    guard status == noErr else {
+        throw STFUError.audioStatus(status, "Unable to read process PID")
+    }
+    return value
+}
+
+func audioString(objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+    var address = propertyAddress(selector)
+    var value: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value)
+    guard status == noErr, let retained = value else {
+        return nil
+    }
+    return retained.takeRetainedValue() as String
+}
+
+func processName(pid: pid_t) -> String {
+    if let app = NSRunningApplication(processIdentifier: pid) {
+        return app.localizedName ?? app.bundleIdentifier ?? "pid \(pid)"
+    }
+
+    let result = runCommand("/bin/ps", ["-p", "\(pid)", "-o", "comm="])
+    let trimmed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "pid \(pid)" : URL(fileURLWithPath: trimmed).lastPathComponent
+}
+
+func outputAudioProcesses() throws -> [AudioProcess] {
+    let processIDs = try audioObjectIDs(
+        objectID: AudioObjectID(kAudioObjectSystemObject),
+        selector: kAudioHardwarePropertyProcessObjectList
+    )
+
+    var processes: [AudioProcess] = []
+    for objectID in processIDs {
+        let running = (try? audioUInt32(
+            objectID: objectID,
+            selector: kAudioProcessPropertyIsRunningOutput
+        )) ?? 0
+        guard running != 0 else {
+            continue
+        }
+
+        let pid = try audioPID(objectID: objectID)
+        processes.append(AudioProcess(
+            objectID: objectID,
+            pid: pid,
+            bundleID: audioString(objectID: objectID, selector: kAudioProcessPropertyBundleID),
+            name: processName(pid: pid)
+        ))
+    }
+
+    return Array(Set(processes)).sorted { $0.pid < $1.pid }
+}
+
+func runCommand(_ launchPath: String, _ arguments: [String]) -> CommandResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: launchPath)
+    process.arguments = arguments
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    do {
+        try process.run()
+        process.waitUntilExit()
+    } catch {
+        return CommandResult(status: 127, output: "", error: String(describing: error))
+    }
+
+    let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let error = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return CommandResult(status: process.terminationStatus, output: output, error: error)
+}
+
+func runAppleScript(_ source: String) -> CommandResult {
+    runCommand("/usr/bin/osascript", ["-e", source])
+}
+
+func appleScriptString(_ value: String) -> String {
+    "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+}
+
+func closeSafariTab(pid: pid_t, dryRun: Bool) -> Bool {
+    guard let tab = safariTabInfo(pid: pid) else {
+        return false
+    }
+
+    if dryRun {
+        print("Would close Safari tab: \(tab.title) (\(tab.url))")
+        return true
+    }
+
+    let script = """
+    tell application "Safari"
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            if (pid of t) is \(pid) then
+              close t
+              return "closed"
+            end if
+          end try
+        end repeat
+      end repeat
+    end tell
+    return ""
+    """
+    let result = runAppleScript(script)
+    let match = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !match.isEmpty {
+        print("Closed Safari tab: \(tab.title) (\(tab.url))")
+        return true
+    }
+    return false
+}
+
+struct SafariTabInfo {
+    let title: String
+    let url: String
+}
+
+func safariTabInfo(pid: pid_t) -> SafariTabInfo? {
+    let script = """
+    tell application "Safari"
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            if (pid of t) is \(pid) then
+              return (name of t) & "\n" & (URL of t)
+            end if
+          end try
+        end repeat
+      end repeat
+    end tell
+    return ""
+    """
+    let result = runAppleScript(script)
+    let lines = result.output
+        .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        .map(String.init)
+    guard let title = lines.first, !title.isEmpty else {
+        return nil
+    }
+    return SafariTabInfo(title: title, url: lines.dropFirst().first ?? "")
+}
+
+func focusSafariTab(pid: pid_t) -> Bool {
+    let script = """
+    tell application "Safari"
+      activate
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            if (pid of t) is \(pid) then
+              set current tab of w to t
+              set index of w to 1
+              return "focused"
+            end if
+          end try
+        end repeat
+      end repeat
+    end tell
+    return ""
+    """
+    return !runAppleScript(script).output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
+let chromiumApps: [(name: String, bundleID: String)] = [
+    ("Google Chrome", "com.google.Chrome"),
+    ("Google Chrome Canary", "com.google.Chrome.canary"),
+    ("Microsoft Edge", "com.microsoft.edgemac"),
+    ("Brave Browser", "com.brave.Browser"),
+    ("Chromium", "org.chromium.Chromium"),
+    ("Arc", "company.thebrowser.Browser")
+]
+
+func runningApplication(bundleID: String) -> NSRunningApplication? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+}
+
+func parentPID(of pid: pid_t) -> pid_t? {
+    let result = runCommand("/bin/ps", ["-p", "\(pid)", "-o", "ppid="])
+    guard result.status == 0 else {
+        return nil
+    }
+    let trimmed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    return pid_t(trimmed)
+}
+
+func runningChromiumApplication(for process: AudioProcess, bundleID: String) -> NSRunningApplication? {
+    var pid = process.pid
+    for _ in 0..<12 {
+        if let app = NSRunningApplication(processIdentifier: pid),
+           app.bundleIdentifier == bundleID {
+            return app
+        }
+
+        guard let parent = parentPID(of: pid), parent > 1, parent != pid else {
+            break
+        }
+        pid = parent
+    }
+
+    return runningApplication(bundleID: bundleID)
+}
+
+func accessibilityTrusted(prompt: Bool = false) -> Bool {
+    guard prompt else {
+        return AXIsProcessTrusted()
+    }
+
+    let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+    return AXIsProcessTrustedWithOptions(options)
+}
+
+func requestAccessibilityAccess() {
+    if accessibilityTrusted(prompt: true) {
+        print("Accessibility permission is already granted.")
+    } else {
+        print("macOS opened the Accessibility permission prompt.")
+        print("Grant access for the app that runs stfu, then run stfu again.")
+    }
+}
+
+func openAccessibilitySettings() {
+    let urls = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "x-apple.systempreferences:com.apple.preference.security"
+    ]
+
+    for value in urls {
+        guard let url = URL(string: value), NSWorkspace.shared.open(url) else {
+            continue
+        }
+        return
+    }
+}
+
+func axAttribute(_ element: AXUIElement, _ attribute: CFString) -> Any? {
+    var value: CFTypeRef?
+    let error = AXUIElementCopyAttributeValue(element, attribute, &value)
+    guard error == .success else {
+        return nil
+    }
+    return value
+}
+
+func axString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+    if let value = axAttribute(element, attribute) as? String {
+        return value
+    }
+    if let value = axAttribute(element, attribute) as? NSNumber {
+        return value.stringValue
+    }
+    return nil
+}
+
+func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+    let childAttributes: [CFString] = [
+        kAXChildrenAttribute as CFString,
+        kAXVisibleChildrenAttribute as CFString,
+        kAXTabsAttribute as CFString,
+        kAXRowsAttribute as CFString,
+        kAXVisibleRowsAttribute as CFString,
+        kAXColumnsAttribute as CFString,
+        kAXVisibleColumnsAttribute as CFString,
+        kAXLinkedUIElementsAttribute as CFString
+    ]
+
+    var children: [AXUIElement] = []
+    var seen = Set<Int>()
+    for attribute in childAttributes {
+        guard let values = axAttribute(element, attribute) as? [AXUIElement] else {
+            continue
+        }
+        for value in values {
+            let id = Int(CFHash(value))
+            if seen.insert(id).inserted {
+                children.append(value)
+            }
+        }
+    }
+    return children
+}
+
+func axWindows(_ appElement: AXUIElement) -> [AXUIElement] {
+    let windows = axAttribute(appElement, kAXWindowsAttribute as CFString) as? [AXUIElement] ?? []
+    guard let focusedValue = axAttribute(appElement, kAXFocusedWindowAttribute as CFString) else {
+        return windows
+    }
+    let focused = focusedValue as! AXUIElement
+
+    var ordered = [focused]
+    for window in windows where !CFEqual(window, focused) {
+        ordered.append(window)
+    }
+    return ordered
+}
+
+func axOwnText(_ element: AXUIElement) -> [String] {
+    [
+        kAXTitleAttribute,
+        kAXDescriptionAttribute,
+        kAXValueAttribute,
+        kAXHelpAttribute,
+        kAXRoleAttribute,
+        kAXRoleDescriptionAttribute,
+        kAXSubroleAttribute,
+        kAXIdentifierAttribute
+    ].compactMap { axString(element, $0 as CFString) }
+}
+
+func axCombinedText(_ element: AXUIElement) -> String {
+    axOwnText(element)
+        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .joined(separator: " | ")
+}
+
+func isAudibleIndicatorText(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    if lower.contains("unmute") || lower.contains("muted") {
+        return false
+    }
+    return lower.contains("audio playing")
+        || lower.contains("playing audio")
+        || lower.contains("sound playing")
+        || lower.contains("playing sound")
+        || lower.contains("mute tab")
+        || lower.contains("mute site")
+        || lower.contains("speaker")
+}
+
+func isTabLikeAXElement(_ element: AXUIElement) -> Bool {
+    let role = (axString(element, kAXRoleAttribute as CFString) ?? "").lowercased()
+    let roleDescription = (axString(element, kAXRoleDescriptionAttribute as CFString) ?? "").lowercased()
+    let subrole = (axString(element, kAXSubroleAttribute as CFString) ?? "").lowercased()
+
+    return role.contains("tab")
+        || role.contains("radio")
+        || roleDescription.contains("tab")
+        || subrole.contains("tab")
+}
+
+struct AXAudibleTab {
+    let element: AXUIElement
+    let label: String
+    let title: String
+    let index: Int?
+}
+
+func findAudibleTab(in root: AXUIElement, verbose: Bool) -> AXAudibleTab? {
+    findAudibleTabs(in: root, verbose: verbose).first
+}
+
+func tabTitle(from text: String) -> String {
+    let parts = text
+        .split(separator: "|")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    let candidate = parts.first ?? text
+    return candidate
+        .replacingOccurrences(of: " - Audio playing", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func tabIndex(_ element: AXUIElement) -> Int? {
+    if let number = axAttribute(element, kAXValueAttribute as CFString) as? NSNumber {
+        return number.intValue
+    }
+    if let value = axString(element, kAXValueAttribute as CFString), let number = Int(value) {
+        return number
+    }
+    return nil
+}
+
+func findAudibleTabs(in root: AXUIElement, verbose: Bool) -> [AXAudibleTab] {
+    var stack: [(element: AXUIElement, path: [AXUIElement])] = [(root, [root])]
+    var seen = Set<Int>()
+    var seenTabs = Set<Int>()
+    var matches: [AXAudibleTab] = []
+    var visited = 0
+    let maxVisited = 4_000
+
+    while let current = stack.popLast(), visited < maxVisited {
+        let currentID = Int(CFHash(current.element))
+        guard seen.insert(currentID).inserted else {
+            continue
+        }
+        visited += 1
+
+        let text = axCombinedText(current.element)
+        if isAudibleIndicatorText(text) {
+            let tab = current.path.reversed().first(where: isTabLikeAXElement)
+            if let tab {
+                let tabText = axCombinedText(tab)
+                let label = tabText.isEmpty ? text : tabText
+                let tabID = Int(CFHash(tab))
+                if seenTabs.insert(tabID).inserted {
+                    matches.append(AXAudibleTab(
+                        element: tab,
+                        label: label,
+                        title: tabTitle(from: label),
+                        index: tabIndex(tab)
+                    ))
+                }
+            } else if isTabLikeAXElement(current.element) {
+                let tabID = Int(CFHash(current.element))
+                if seenTabs.insert(tabID).inserted {
+                    matches.append(AXAudibleTab(
+                        element: current.element,
+                        label: text,
+                        title: tabTitle(from: text),
+                        index: tabIndex(current.element)
+                    ))
+                }
+            } else if verbose {
+                print("Found an audio indicator but could not map it to a tab: \(text)")
+            }
+        }
+
+        let children = axChildren(current.element)
+        for child in children.reversed() {
+            stack.append((child, current.path + [child]))
+        }
+    }
+
+    if verbose, visited >= maxVisited {
+        print("Stopped Accessibility scan after \(maxVisited) elements.")
+    }
+    return matches
+}
+
+func sendCommandW(to app: NSRunningApplication) -> Bool {
+    app.activate()
+    usleep(200_000)
+
+    guard let source = CGEventSource(stateID: .hidSystemState),
+          let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 13, keyDown: true),
+          let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 13, keyDown: false) else {
+        return false
+    }
+
+    keyDown.flags = .maskCommand
+    keyUp.flags = .maskCommand
+    keyDown.post(tap: .cghidEventTap)
+    keyUp.post(tap: .cghidEventTap)
+    return true
+}
+
+func closeActiveChromiumTab(appName: String, app: NSRunningApplication, label: String) -> Bool {
+    if sendCommandW(to: app) {
+        print("Closed \(appName) tab via Accessibility: \(label)")
+        return true
+    }
+
+    fputs("Failed to send Command-W to \(appName) after selecting tab.\n", stderr)
+    return false
+}
+
+func closeChromiumAudibleTabWithAccessibility(
+    appName: String,
+    app: NSRunningApplication,
+    dryRun: Bool,
+    verbose: Bool
+) -> Bool {
+    guard accessibilityTrusted() else {
+        if verbose {
+            print("\(appName) Accessibility probe is unavailable.")
+            print("Run `stfu --request-accessibility`, grant access in System Settings, then retry.")
+        }
+        return false
+    }
+
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    let windows = axWindows(appElement)
+    if windows.isEmpty {
+        if verbose {
+            print("\(appName) did not expose any Accessibility windows.")
+        }
+        return false
+    }
+
+    for window in windows {
+        guard let candidate = findAudibleTab(in: window, verbose: verbose) else {
+            continue
+        }
+
+        if dryRun {
+            print("Would close \(appName) tab via Accessibility: \(candidate.label)")
+            return true
+        }
+
+        _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        let pressError = AXUIElementPerformAction(candidate.element, kAXPressAction as CFString)
+        if pressError != .success, verbose {
+            print("Selecting \(appName) tab returned Accessibility error \(pressError.rawValue).")
+        }
+        usleep(200_000)
+        return closeActiveChromiumTab(appName: appName, app: app, label: candidate.label)
+    }
+
+    return false
+}
+
+func focusChromiumTab(app: NSRunningApplication, tab: AXUIElement) -> Bool {
+    app.activate()
+    if let window = axWindows(AXUIElementCreateApplication(app.processIdentifier)).first {
+        _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    }
+    return AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+}
+
+func audibleChromiumTabs(app: NSRunningApplication, verbose: Bool = false) -> [AXAudibleTab] {
+    guard accessibilityTrusted() else {
+        return []
+    }
+
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    return axWindows(appElement).flatMap { findAudibleTabs(in: $0, verbose: verbose) }
+}
+
+func isChromiumRelated(_ process: AudioProcess, appBundleID: String) -> Bool {
+    if process.bundleID == appBundleID {
+        return true
+    }
+    guard let bundleID = process.bundleID else {
+        return false
+    }
+    return bundleID.hasPrefix(appBundleID + ".") || bundleID.lowercased().contains("chrom")
+}
+
+func matchesBundleFilter(_ process: AudioProcess, filter: String) -> Bool {
+    guard let bundleID = process.bundleID else {
+        return false
+    }
+    return bundleID == filter || bundleID.hasPrefix(filter + ".")
+}
+
+func closeChromiumMediaTab(appName: String, dryRun: Bool, verbose: Bool) -> Bool {
+    let probe = """
+    (() => {
+      const media = Array.from(document.querySelectorAll('audio,video'));
+      return media.some((el) => {
+        const audible = !el.muted && Number(el.volume || 0) > 0;
+        return audible && !el.paused && !el.ended && el.readyState >= 2;
+      }) ? 'true' : 'false';
+    })();
+    """
+
+    let script = """
+    tell application \(appleScriptString(appName))
+      if (count of windows) is 0 then return "__STFU_NO_WINDOWS__"
+      set firstError to ""
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            set isPlaying to execute t javascript \(appleScriptString(probe))
+            if isPlaying is "true" then
+              set tabTitle to title of t
+              set tabURL to URL of t
+              if \(dryRun ? "false" : "true") then close t
+              return tabTitle & " (" & tabURL & ")"
+            end if
+          on error errMsg
+            if firstError is "" then set firstError to errMsg
+          end try
+        end repeat
+      end repeat
+      if firstError is not "" then return "__STFU_ERROR__" & firstError
+    end tell
+    return ""
+    """
+
+    let result = runAppleScript(script)
+    let match = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    if match == "__STFU_NO_WINDOWS__" {
+        if verbose {
+            print("\(appName) is running, but it did not expose any AppleScript windows.")
+        }
+        return false
+    }
+    if match.hasPrefix("__STFU_ERROR__") {
+        if verbose {
+            let message = String(match.dropFirst("__STFU_ERROR__".count))
+            print("\(appName) tab probe failed: \(message)")
+            if message.contains("Executing JavaScript through AppleScript is turned off") {
+                print("Enable it in \(appName): View > Developer > Allow JavaScript from Apple Events.")
+            }
+        }
+        return false
+    }
+    if !match.isEmpty {
+        print("\(dryRun ? "Would close" : "Closed") \(appName) tab: \(match)")
+        return true
+    }
+    if verbose {
+        let detail = result.error.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !detail.isEmpty {
+            print("No \(appName) media tab match: \(detail)")
+        }
+    }
+    return false
+}
+
+func closeApplication(_ process: AudioProcess, dryRun: Bool) -> Bool {
+    if dryRun {
+        print("Would close app: \(process.name) [pid \(process.pid)]")
+        return true
+    }
+
+    if let app = NSRunningApplication(processIdentifier: process.pid) {
+        let didTerminate = app.terminate()
+        if didTerminate {
+            print("Closed app: \(process.name) [pid \(process.pid)]")
+            return true
+        }
+    }
+
+    let result = runCommand("/bin/kill", ["-TERM", "\(process.pid)"])
+    if result.status == 0 {
+        print("Terminated process: \(process.name) [pid \(process.pid)]")
+        return true
+    }
+
+    fputs("Failed to close \(process.name) [pid \(process.pid)]: \(result.error)\n", stderr)
+    return false
+}
+
+func handleProcess(_ process: AudioProcess, options: Options) -> Bool {
+    if runningApplication(bundleID: "com.apple.Safari") != nil {
+        if closeSafariTab(pid: process.pid, dryRun: options.dryRun) {
+            return true
+        }
+    }
+
+    for app in chromiumApps where runningApplication(bundleID: app.bundleID) != nil {
+        if isChromiumRelated(process, appBundleID: app.bundleID) {
+            let runningApp = runningChromiumApplication(for: process, bundleID: app.bundleID)
+            if closeChromiumAudibleTabWithAccessibility(
+                appName: app.name,
+                app: runningApp ?? runningApplication(bundleID: app.bundleID)!,
+                dryRun: options.dryRun,
+                verbose: options.verbose
+            ) {
+                return true
+            }
+            if closeChromiumMediaTab(appName: app.name, dryRun: options.dryRun, verbose: options.verbose) {
+                return true
+            }
+            fputs("Could not identify an audible tab in \(app.name); leaving browser process untouched.\n", stderr)
+            return false
+        }
+    }
+
+    return closeApplication(process, dryRun: options.dryRun)
+}
+
+func doctorChromiumApp(_ app: (name: String, bundleID: String)) {
+    guard let running = runningApplication(bundleID: app.bundleID) else {
+        print("[skip] \(app.name): not running")
+        return
+    }
+
+    if accessibilityTrusted() {
+        let appElement = AXUIElementCreateApplication(running.processIdentifier)
+        let windowCount = axWindows(appElement).count
+        if windowCount == 0 {
+            print("[fail] \(app.name): Accessibility is allowed, but no windows are exposed")
+        } else {
+            print("[ok] \(app.name): Accessibility can inspect \(windowCount) window\(windowCount == 1 ? "" : "s")")
+        }
+    } else {
+        print("[fail] \(app.name): Accessibility permission is not granted")
+        print("       Run: stfu --request-accessibility")
+    }
+
+    let windowCountScript = """
+    tell application \(appleScriptString(app.name))
+      return count of windows
+    end tell
+    """
+    let windowResult = runAppleScript(windowCountScript)
+    let windowCount = Int(windowResult.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    if windowCount == 0 {
+        print("[warn] \(app.name): no AppleScript windows are exposed for tab close fallback")
+        return
+    }
+    print("[ok] \(app.name): AppleScript can close tabs in \(windowCount) window\(windowCount == 1 ? "" : "s")")
+
+    let jsScript = """
+    tell application \(appleScriptString(app.name))
+      return execute active tab of front window javascript "1 + 1"
+    end tell
+    """
+    let jsResult = runAppleScript(jsScript)
+    if jsResult.status == 0 {
+        print("[ok] \(app.name): JavaScript tab probe fallback is allowed")
+        return
+    }
+
+    let detail = jsResult.error.trimmingCharacters(in: .whitespacesAndNewlines)
+    if detail.contains("Executing JavaScript through AppleScript is turned off") {
+        print("[skip] \(app.name): JavaScript tab probe fallback is disabled")
+    } else {
+        print("[skip] \(app.name): JavaScript tab probe fallback failed")
+        if !detail.isEmpty {
+            print("       \(detail)")
+        }
+    }
+}
+
+func runDoctor() {
+    do {
+        _ = try outputAudioProcesses()
+        print("[ok] CoreAudio process detection works")
+    } catch {
+        print("[fail] CoreAudio process detection failed: \(error)")
+    }
+
+    if accessibilityTrusted() {
+        print("[ok] Accessibility permission is granted")
+    } else {
+        print("[fail] Accessibility permission is not granted")
+        print("       Run: stfu --request-accessibility")
+    }
+
+    if runningApplication(bundleID: "com.apple.Safari") != nil {
+        print("[ok] Safari is running; Safari tab matching uses WebContent PIDs")
+    } else {
+        print("[skip] Safari: not running")
+    }
+
+    for app in chromiumApps {
+        doctorChromiumApp(app)
+    }
+}
+
+func stfuYellow() -> NSColor {
+    NSColor(calibratedRed: 1.0, green: 0.84, blue: 0.12, alpha: 1)
+}
+
+func stfuRed() -> NSColor {
+    NSColor(calibratedRed: 1.0, green: 0.18, blue: 0.20, alpha: 1)
+}
+
+func stfuBlack() -> NSColor {
+    NSColor(calibratedWhite: 0.035, alpha: 1)
+}
+
+@MainActor
+final class STFUPulpHeroView: NSView {
+    private let image: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "pulpfiction_new", withExtension: "webp") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }()
+
+    override func draw(_ dirtyRect: NSRect) {
+        stfuBlack().setFill()
+        bounds.fill()
+
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        if let image {
+            let imageSize = image.size
+            if imageSize.width > 0, imageSize.height > 0 {
+                let scale = max(bounds.width / imageSize.width, bounds.height / imageSize.height)
+                let drawSize = NSSize(width: imageSize.width * scale, height: imageSize.height * scale)
+                let drawRect = NSRect(
+                    x: bounds.midX - drawSize.width / 2,
+                    y: bounds.midY - drawSize.height / 2,
+                    width: drawSize.width,
+                    height: drawSize.height
+                )
+
+                image.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1)
+
+                NSColor(calibratedWhite: 0, alpha: 0.22).setFill()
+                bounds.fill()
+            }
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+
+        let fontSize = min(bounds.height * 0.48, bounds.width * 0.18)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .black),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.84),
+            .strokeColor: NSColor.black.withAlphaComponent(0.24),
+            .strokeWidth: -2,
+            .paragraphStyle: paragraph
+        ]
+        let text = NSAttributedString(string: "STFU", attributes: attributes)
+        let textHeight = text.size().height
+        text.draw(in: NSRect(
+            x: 48,
+            y: bounds.midY - textHeight / 2,
+            width: bounds.width - 96,
+            height: textHeight * 1.25
+        ))
+    }
+}
+
+enum OffenderKind {
+    case safariTab(pid_t)
+    case chromiumTab(appName: String, app: NSRunningApplication, tab: AXUIElement)
+    case unresolvedBrowser(appName: String, app: NSRunningApplication)
+    case app(AudioProcess)
+    case blockedBrowser(appName: String)
+}
+
+final class SoundOffender {
+    let id = UUID()
+    let name: String
+    let detail: String
+    let kind: OffenderKind
+    let buttonTitle: String
+
+    init(name: String, detail: String, kind: OffenderKind, buttonTitle: String = "STFU") {
+        self.name = name
+        self.detail = detail
+        self.kind = kind
+        self.buttonTitle = buttonTitle
+    }
+}
+
+func soundOffenders() -> [SoundOffender] {
+    let processes = (try? outputAudioProcesses()) ?? []
+    var offenders: [SoundOffender] = []
+    var handledPIDs = Set<pid_t>()
+    var handledBrowserApps = Set<pid_t>()
+
+    for process in processes {
+        if runningApplication(bundleID: "com.apple.Safari") != nil,
+           let safari = safariTabInfo(pid: process.pid) {
+            offenders.append(SoundOffender(
+                name: "Safari tab",
+                detail: "\(safari.title)\(safari.url.isEmpty ? "" : " - \(safari.url)")",
+                kind: .safariTab(process.pid)
+            ))
+            handledPIDs.insert(process.pid)
+            continue
+        }
+
+        var matchedChromium = false
+        for chromium in chromiumApps where isChromiumRelated(process, appBundleID: chromium.bundleID) {
+            matchedChromium = true
+            guard let app = runningChromiumApplication(for: process, bundleID: chromium.bundleID) else {
+                continue
+            }
+            guard handledBrowserApps.insert(app.processIdentifier).inserted else {
+                continue
+            }
+
+            if accessibilityTrusted() {
+                let tabs = audibleChromiumTabs(app: app)
+                if tabs.isEmpty {
+                    offenders.append(SoundOffender(
+                        name: chromium.name,
+                        detail: "Audio detected, but no noisy tab indicator was visible.",
+                        kind: .unresolvedBrowser(appName: chromium.name, app: app)
+                    ))
+                } else {
+                    for tab in tabs {
+                        let tabNumber = tab.index.map { "Tab \($0)" } ?? "Tab"
+                        offenders.append(SoundOffender(
+                            name: "\(chromium.name) \(tabNumber)",
+                            detail: tab.title.isEmpty ? tab.label : tab.title,
+                            kind: .chromiumTab(appName: chromium.name, app: app, tab: tab.element)
+                        ))
+                    }
+                }
+            } else {
+                offenders.append(SoundOffender(
+                    name: chromium.name,
+                    detail: "Needs Accessibility for this STFU build to identify the noisy tab.",
+                    kind: .blockedBrowser(appName: chromium.name),
+                    buttonTitle: "Open Settings"
+                ))
+            }
+            handledPIDs.insert(process.pid)
+        }
+
+        if matchedChromium {
+            continue
+        }
+
+        offenders.append(SoundOffender(
+            name: process.name,
+            detail: "\(process.bundleID ?? "pid \(process.pid)")",
+            kind: .app(process),
+            buttonTitle: "Quit App"
+        ))
+        handledPIDs.insert(process.pid)
+    }
+
+    return offenders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+@discardableResult
+func focusOffender(_ offender: SoundOffender) -> Bool {
+    switch offender.kind {
+    case let .safariTab(pid):
+        return focusSafariTab(pid: pid)
+    case let .chromiumTab(_, app, tab):
+        return focusChromiumTab(app: app, tab: tab)
+    case let .unresolvedBrowser(_, app):
+        app.activate()
+        return true
+    case let .app(process):
+        if let app = NSRunningApplication(processIdentifier: process.pid) {
+            app.activate()
+            return true
+        }
+        return false
+    case .blockedBrowser:
+        openAccessibilitySettings()
+        return true
+    }
+}
+
+@discardableResult
+func closeOffender(_ offender: SoundOffender) -> Bool {
+    switch offender.kind {
+    case let .safariTab(pid):
+        return closeSafariTab(pid: pid, dryRun: false)
+    case let .chromiumTab(appName, app, tab):
+        _ = focusChromiumTab(app: app, tab: tab)
+        usleep(150_000)
+        return closeActiveChromiumTab(appName: appName, app: app, label: offender.detail)
+    case .unresolvedBrowser:
+        return false
+    case let .app(process):
+        return closeApplication(process, dryRun: false)
+    case .blockedBrowser:
+        openAccessibilitySettings()
+        return false
+    }
+}
+
+@MainActor
+final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private var window: NSWindow?
+    private let statusLabel = NSTextField(labelWithString: "Scanning the noise suspects...")
+    private let hintLabel = NSTextField(wrappingLabelWithString: "")
+    private let doctorOutput = NSTextField(wrappingLabelWithString: "")
+    private let tableView = NSTableView()
+    private let scrollView = NSScrollView()
+    private let emptyLabel = NSTextField(labelWithString: "Blessed silence. Nobody is yapping right now.")
+    private lazy var closeAllButton: NSButton = {
+        let button = NSButton(title: "STFU Everything", target: self, action: #selector(closeAll))
+        button.bezelStyle = .rounded
+        button.contentTintColor = stfuRed()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+    private var offenders: [SoundOffender] = []
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        buildWindow()
+        refreshStatus()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard window != nil else { return }
+        refreshStatus()
+    }
+
+    private func buildWindow() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "STFU"
+        window.minSize = NSSize(width: 780, height: 520)
+        window.center()
+
+        let content = NSView()
+        content.wantsLayer = true
+        content.layer?.backgroundColor = stfuBlack().cgColor
+        window.contentView = content
+
+        let heroView = STFUPulpHeroView()
+        heroView.translatesAutoresizingMaskIntoConstraints = false
+
+        statusLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        hintLabel.font = .systemFont(ofSize: 13)
+        hintLabel.textColor = NSColor(calibratedWhite: 0.78, alpha: 1)
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        configureTable()
+
+        emptyLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        emptyLabel.textColor = stfuYellow()
+        emptyLabel.alignment = .center
+        emptyLabel.isHidden = true
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let refreshButton = NSButton(title: "Refresh the Suspects", target: self, action: #selector(refreshAction))
+        refreshButton.bezelStyle = .rounded
+        refreshButton.contentTintColor = stfuYellow()
+        refreshButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let buttons = NSStackView(views: [refreshButton, closeAllButton])
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+        buttons.distribution = .gravityAreas
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+
+        doctorOutput.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        doctorOutput.textColor = NSColor(calibratedWhite: 0.72, alpha: 1)
+        doctorOutput.maximumNumberOfLines = 5
+        doctorOutput.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [heroView, statusLabel, hintLabel, scrollView, emptyLabel, buttons] {
+            content.addSubview(view)
+        }
+
+        NSLayoutConstraint.activate([
+            heroView.topAnchor.constraint(equalTo: content.topAnchor),
+            heroView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            heroView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            heroView.heightAnchor.constraint(equalToConstant: 260),
+
+            statusLabel.topAnchor.constraint(equalTo: heroView.bottomAnchor, constant: 18),
+            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
+            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -26),
+
+            hintLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 5),
+            hintLabel.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
+            hintLabel.trailingAnchor.constraint(equalTo: statusLabel.trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -26),
+            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -18),
+
+            emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
+            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 20),
+            emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -20),
+
+            buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
+            buttons.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -26),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
+        ])
+
+        self.window = window
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func configureTable() {
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.headerView = nil
+        tableView.rowHeight = 56
+        tableView.intercellSpacing = NSSize(width: 0, height: 8)
+        tableView.target = self
+        tableView.doubleAction = #selector(focusSelected)
+        tableView.usesAlternatingRowBackgroundColors = false
+        tableView.allowsEmptySelection = true
+        tableView.selectionHighlightStyle = .none
+        tableView.backgroundColor = NSColor(calibratedWhite: 0.055, alpha: 1)
+        tableView.gridColor = NSColor(calibratedWhite: 0.18, alpha: 1)
+
+        let offenderColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("offender"))
+        offenderColumn.title = "Offender"
+        offenderColumn.width = 190
+        tableView.addTableColumn(offenderColumn)
+
+        let detailColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("detail"))
+        detailColumn.title = "Charge"
+        detailColumn.width = 340
+        tableView.addTableColumn(detailColumn)
+
+        let actionColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("action"))
+        actionColumn.title = "Action"
+        actionColumn.width = 260
+        tableView.addTableColumn(actionColumn)
+
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = tableView.backgroundColor
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    private func refreshStatus() {
+        offenders = soundOffenders()
+        tableView.reloadData()
+        emptyLabel.isHidden = !offenders.isEmpty
+        closeAllButton.isHidden = offenders.filter(isClosable).count < 2
+
+        if offenders.isEmpty {
+            statusLabel.stringValue = "No active noise crimes detected."
+            statusLabel.textColor = .systemGreen
+            hintLabel.stringValue = ""
+            return
+        }
+
+        let needsAccessibility = offenders.contains { offender in
+            if case .blockedBrowser = offender.kind {
+                return true
+            }
+            return false
+        }
+
+        statusLabel.stringValue = "\(offenders.count) sound offender\(offenders.count == 1 ? "" : "s")"
+        statusLabel.textColor = stfuRed()
+        if needsAccessibility {
+            hintLabel.stringValue = "A browser source needs Accessibility for this STFU build. If STFU already looks enabled, toggle it off and on once."
+        } else {
+            hintLabel.stringValue = ""
+        }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        offenders.count
+    }
+
+    private func isBlockedBrowser(_ offender: SoundOffender) -> Bool {
+        if case .blockedBrowser = offender.kind {
+            return true
+        }
+        return false
+    }
+
+    private func isClosable(_ offender: SoundOffender) -> Bool {
+        switch offender.kind {
+        case .safariTab, .chromiumTab, .app:
+            return true
+        case .unresolvedBrowser, .blockedBrowser:
+            return false
+        }
+    }
+
+    private func focusTitle(for offender: SoundOffender) -> String? {
+        switch offender.kind {
+        case .safariTab, .chromiumTab:
+            return "Go to Tab"
+        case .unresolvedBrowser, .app:
+            return "Go to App"
+        case .blockedBrowser:
+            return nil
+        }
+    }
+
+    private func closeTitle(for offender: SoundOffender) -> String? {
+        switch offender.kind {
+        case .safariTab, .chromiumTab:
+            return "Close Tab"
+        case .app:
+            return "Quit App"
+        case .unresolvedBrowser:
+            return nil
+        case .blockedBrowser:
+            return "Open Settings"
+        }
+    }
+
+    private func rowButton(title: String, color: NSColor, row: Int, action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.contentTintColor = color
+        button.tag = row
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return button
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row < offenders.count, let identifier = tableColumn?.identifier else {
+            return nil
+        }
+        let offender = offenders[row]
+
+        if identifier.rawValue == "action" {
+            let stack = NSStackView()
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+            stack.spacing = 8
+            stack.distribution = .fillEqually
+            stack.edgeInsets = NSEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+
+            if let title = focusTitle(for: offender) {
+                stack.addArrangedSubview(rowButton(
+                    title: title,
+                    color: stfuYellow(),
+                    row: row,
+                    action: #selector(focusRowButton(_:))
+                ))
+            }
+
+            if let title = closeTitle(for: offender) {
+                stack.addArrangedSubview(rowButton(
+                    title: title,
+                    color: isBlockedBrowser(offender) ? stfuYellow() : stfuRed(),
+                    row: row,
+                    action: #selector(closeRowButton(_:))
+                ))
+            }
+
+            return stack
+        }
+
+        let text: String
+        let font: NSFont
+        let color: NSColor
+        if identifier.rawValue == "offender" {
+            text = offender.name
+            font = .systemFont(ofSize: 14, weight: .semibold)
+            color = stfuYellow()
+        } else {
+            text = offender.detail
+            font = .systemFont(ofSize: 12, weight: .regular)
+            color = NSColor(calibratedWhite: 0.82, alpha: 1)
+        }
+
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = font
+        field.textColor = color
+        field.lineBreakMode = .byTruncatingTail
+        field.maximumNumberOfLines = identifier.rawValue == "offender" ? 2 : 3
+        return field
+    }
+
+    private func selectedOffender() -> SoundOffender? {
+        let row = tableView.selectedRow
+        guard row >= 0, row < offenders.count else {
+            return nil
+        }
+        return offenders[row]
+    }
+
+    @objc private func requestPermission() {
+        _ = accessibilityTrusted(prompt: true)
+        openAccessibilitySettings()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.refreshStatus()
+        }
+    }
+
+    @objc private func openSettings() {
+        openAccessibilitySettings()
+    }
+
+    @objc private func refreshAction() {
+        doctorOutput.stringValue = ""
+        refreshStatus()
+    }
+
+    @objc private func focusSelected() {
+        guard let offender = selectedOffender() else {
+            NSSound.beep()
+            return
+        }
+        _ = focusOffender(offender)
+    }
+
+    @objc private func closeSelected() {
+        guard let offender = selectedOffender() else {
+            NSSound.beep()
+            return
+        }
+        _ = closeOffender(offender)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.refreshStatus()
+        }
+    }
+
+    @objc private func focusRowButton(_ sender: NSButton) {
+        guard sender.tag >= 0, sender.tag < offenders.count else {
+            return
+        }
+        _ = focusOffender(offenders[sender.tag])
+    }
+
+    @objc private func closeRowButton(_ sender: NSButton) {
+        guard sender.tag >= 0, sender.tag < offenders.count else {
+            return
+        }
+        _ = closeOffender(offenders[sender.tag])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.refreshStatus()
+        }
+    }
+
+    @objc private func closeAll() {
+        let targets = offenders.filter(isClosable)
+        guard !targets.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        for offender in targets {
+            _ = closeOffender(offender)
+            usleep(120_000)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            self.refreshStatus()
+        }
+    }
+
+    @objc private func runDoctorAction() {
+        let result = runCommand(Bundle.main.executablePath ?? CommandLine.arguments[0], ["--doctor"])
+        doctorOutput.stringValue = (result.output + result.error)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        refreshStatus()
+    }
+}
+
+func shouldRunSetupApp() -> Bool {
+    CommandLine.arguments.count == 1
+        && Bundle.main.bundleURL.pathExtension == "app"
+        && isatty(STDOUT_FILENO) == 0
+}
+
+@MainActor
+func runSetupApp() {
+    let app = NSApplication.shared
+    let delegate = SetupAppDelegate()
+    app.delegate = delegate
+    app.run()
+}
+
+if shouldRunSetupApp() {
+    MainActor.assumeIsolated {
+        runSetupApp()
+    }
+    exit(0)
+}
+
+guard let options = parseOptions(Array(CommandLine.arguments.dropFirst())) else {
+    exit(2)
+}
+
+if options.doctor {
+    runDoctor()
+    exit(0)
+}
+
+if options.requestAccessibility {
+    requestAccessibilityAccess()
+    exit(accessibilityTrusted() ? 0 : 1)
+}
+
+do {
+    var processes = try outputAudioProcesses()
+    if let bundleID = options.bundleID {
+        processes = processes.filter { matchesBundleFilter($0, filter: bundleID) }
+    }
+
+    if processes.isEmpty {
+        if let bundleID = options.bundleID {
+            print("No output audio processes found for \(bundleID).")
+        } else {
+            print("No output audio processes found.")
+        }
+        exit(1)
+    }
+
+    if options.list {
+        for process in processes {
+            print("[pid \(process.pid)] \(process.name) \(process.bundleID ?? "(no bundle id)")")
+        }
+        if !options.dryRun && !options.all {
+            exit(0)
+        }
+    }
+
+    var closedCount = 0
+    for process in processes {
+        if handleProcess(process, options: options) {
+            closedCount += 1
+            if !options.all {
+                break
+            }
+        }
+    }
+
+    exit(closedCount == 0 ? 1 : 0)
+} catch {
+    fputs("stfu: \(error)\n", stderr)
+    exit(1)
+}

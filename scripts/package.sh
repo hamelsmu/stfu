@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export COPYFILE_DISABLE=1
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="${VERSION:-0.1.0}"
+IDENTIFIER="${IDENTIFIER:-dev.hamel.stfu}"
+APP_NAME="STFU"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-$IDENTIFIER}"
+INSTALLER_IDENTIFIER="${INSTALLER_IDENTIFIER:-$IDENTIFIER.installer}"
+DIST_DIR="$ROOT/dist"
+WORK_DIR="$ROOT/.build/installer"
+PAYLOAD_DIR="$WORK_DIR/payload"
+SCRIPTS_DIR="$WORK_DIR/scripts"
+DMG_ROOT="$WORK_DIR/dmg-root"
+ICON_PATH="$WORK_DIR/STFU.icns"
+DEFAULT_ARTWORK_PATH="$ROOT/assets/pulpfiction_new.webp"
+if [[ ! -f "$DEFAULT_ARTWORK_PATH" ]]; then
+  DEFAULT_ARTWORK_PATH="$HOME/Downloads/pulpfiction_new.webp"
+fi
+ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
+APP_BUNDLE="$PAYLOAD_DIR/Applications/$APP_NAME.app"
+PKG_PATH="$DIST_DIR/STFU-$VERSION.pkg"
+DMG_PATH="$DIST_DIR/STFU-$VERSION.dmg"
+
+rm -rf "$WORK_DIR"
+mkdir -p \
+  "$APP_BUNDLE/Contents/MacOS" \
+  "$APP_BUNDLE/Contents/Resources" \
+  "$PAYLOAD_DIR/usr/local/bin" \
+  "$SCRIPTS_DIR" \
+  "$DMG_ROOT" \
+  "$DIST_DIR"
+
+swift build --package-path "$ROOT" -c release
+if [[ -f "$ARTWORK_PATH" ]]; then
+  "$ROOT/scripts/make-icon.swift" "$ICON_PATH" "$ARTWORK_PATH"
+else
+  "$ROOT/scripts/make-icon.swift" "$ICON_PATH"
+fi
+
+install -m 755 "$ROOT/.build/release/stfu" "$APP_BUNDLE/Contents/MacOS/stfu"
+cp "$ICON_PATH" "$APP_BUNDLE/Contents/Resources/STFU.icns"
+if [[ -f "$ARTWORK_PATH" ]]; then
+  cp "$ARTWORK_PATH" "$APP_BUNDLE/Contents/Resources/pulpfiction_new.webp"
+fi
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>STFU</string>
+  <key>CFBundleExecutable</key>
+  <string>stfu</string>
+  <key>CFBundleIconFile</key>
+  <string>STFU</string>
+  <key>CFBundleIdentifier</key>
+  <string>$APP_BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>STFU</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>STFU sends Apple events to close noisy browser tabs after macOS identifies the app producing sound.</string>
+</dict>
+</plist>
+PLIST
+
+cat > "$PAYLOAD_DIR/usr/local/bin/stfu" <<'WRAPPER'
+#!/bin/sh
+exec /Applications/STFU.app/Contents/MacOS/stfu "$@"
+WRAPPER
+chmod 755 "$PAYLOAD_DIR/usr/local/bin/stfu"
+
+cat > "$SCRIPTS_DIR/postinstall" <<'POSTINSTALL'
+#!/bin/sh
+/usr/bin/open -a "/Applications/STFU.app" >/dev/null 2>&1 || true
+exit 0
+POSTINSTALL
+chmod 755 "$SCRIPTS_DIR/postinstall"
+
+find "$PAYLOAD_DIR" -name '._*' -delete
+xattr -cr "$PAYLOAD_DIR" || true
+
+APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
+codesign --force --deep --sign "$APP_SIGN_IDENTITY" "$APP_BUNDLE"
+
+PKGBUILD_ARGS=(
+  --root "$PAYLOAD_DIR"
+  --scripts "$SCRIPTS_DIR"
+  --identifier "$INSTALLER_IDENTIFIER"
+  --version "$VERSION"
+  --install-location "/"
+  --filter '\.DS_Store$'
+  --filter '(^|/)\.svn($|/)'
+  --filter '(^|/)CVS($|/)'
+  --filter '(^|/)\._[^/]*$'
+)
+
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  PKGBUILD_ARGS+=(--sign "$SIGN_IDENTITY")
+fi
+
+pkgbuild "${PKGBUILD_ARGS[@]}" "$PKG_PATH"
+
+cp "$PKG_PATH" "$DMG_ROOT/Install STFU.pkg"
+cp "$ICON_PATH" "$DMG_ROOT/.VolumeIcon.icns"
+cat > "$DMG_ROOT/README.txt" <<README
+STFU
+
+1. Open "Install STFU.pkg".
+2. Open STFU.
+3. If a Chrome row says it needs Accessibility, click "Open Settings".
+4. In System Settings > Privacy & Security > Accessibility, turn on STFU.
+
+The installer adds:
+- /Applications/STFU.app
+- /usr/local/bin/stfu
+README
+
+SetFile -a C "$DMG_ROOT" || true
+rm -f "$DMG_PATH"
+hdiutil create \
+  -volname "STFU" \
+  -srcfolder "$DMG_ROOT" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH" >/dev/null
+
+if [[ -n "${DMG_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --sign "$DMG_SIGN_IDENTITY" "$DMG_PATH"
+fi
+
+if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+  xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DMG_PATH"
+fi
+
+echo "$PKG_PATH"
+echo "$DMG_PATH"
