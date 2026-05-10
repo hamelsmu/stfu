@@ -8,3 +8,10 @@
 - Use the near-silent local fixture in `test-fixtures/chrome-audio.html` for Chrome audio tests, and clean up test tabs/processes immediately after each scenario. Do not leave audible tones running.
 - Launch `/Applications/STFU.app` for permission-sensitive GUI tests. Avoid testing the copied build payload app for Accessibility flows because macOS can treat it as a different app identity.
 - If the Chrome plugin or Computer Use cannot perform a required step, report that as a blocker instead of falling back to Playwright.
+
+## Build and Release
+
+- Use `just build`, `just package`, and `just verify` for local checks. `scripts/verify.sh` rebuilds artifacts by default; pass `VERIFY_EXISTING=1` only after a fresh package step.
+- Use `VERSION=x.y.z just release` as the local GitHub Release path. The GitHub Actions workflow builds and uploads CI artifacts only; it does not mutate releases.
+- Do not replace an existing tag unless the user explicitly wants that release replaced; then use `FORCE=1 VERSION=x.y.z just release`.
+- The default artwork is prototype user-provided artwork. Replace it before public redistribution unless the user confirms distribution rights.

@@ -15,7 +15,7 @@ This plan assumes STFU has already been built, installed from the DMG/pkg, and i
 
 ## Baseline Setup
 
-1. Install `dist/STFU-0.1.0.dmg`.
+1. Set `VERSION` to the release under test, then install `dist/STFU-$VERSION.dmg`.
 2. Open `/Applications/STFU.app`.
 3. Grant Accessibility permission to `STFU` in System Settings > Privacy & Security > Accessibility.
 4. Confirm baseline health:
@@ -68,7 +68,7 @@ Expected app behavior:
 - Row detail shows `stfu Chrome audio test`.
 - `Go to Tab` brings Chrome/tab forward.
 - `Close Tab` closes only that tab.
-- After closing, `Refresh the Suspects` shows no Chrome audio source.
+- After closing, `Refresh` shows no Chrome audio source.
 
 CLI cross-check:
 
@@ -224,9 +224,8 @@ Run after granting Accessibility:
 Before release:
 
 ```sh
-swift build -c release
-scripts/package.sh
-hdiutil verify dist/STFU-0.1.0.dmg
+VERSION=0.1.0
+VERSION="$VERSION" scripts/verify.sh
 ```
 
 Then:

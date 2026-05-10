@@ -2,13 +2,15 @@
 
 <img src="assets/stfu-icon.png" alt="STFU" width="180">
 
-Have you ever had a stray video, song, or mystery browser tab playing from your computer and you can't find where? STFU helps you find the culprit and make it STFU.
+Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
+
+Have you ever had a stray video, song, or mystery browser tab playing from your computer and you can't find where? This app helps you find the culprit and make it STFU.
 
 - Browser tab making noise: close only that tab.
 - Normal app making noise: quit that app.
-- Multiple offenders: close them one at a time or use `STFU Everything`.
+- Multiple sound sources: close them one at a time or use `STFU Everything`.
 
-![STFU app showing multiple sound offenders](assets/screenshots/app-multiple-sources.png)
+![STFU app showing multiple sound sources](assets/screenshots/app-multiple-sources.png)
 
 ## Install
 
@@ -55,8 +57,8 @@ In the app:
 
 - `Go to Tab` / `Go to App`: jump to the noisy source.
 - `Close Tab` / `Quit App`: silence that source.
-- `Open Settings`: grant Accessibility when Chrome needs it.
-- `Refresh the Suspects`: rescan current audio sources.
+- `Open Settings`: grant Accessibility when a browser needs it.
+- `Refresh`: rescan current audio sources.
 
 From Terminal:
 
@@ -76,24 +78,36 @@ Requirements:
 - macOS 14+
 - Xcode command line tools
 - Swift 6.0+
+- `just` for the shortcut commands below
 
-Build the CLI:
+Common commands:
 
 ```sh
 xcode-select --install
-swift build -c release
+just build
+just package
+just verify
+just install-local
 ```
 
-Build the installer package and DMG:
+The underlying scripts are plain shell, so this also works without `just`:
 
 ```sh
+swift build -c release
 scripts/package.sh
+scripts/verify.sh
+```
+
+Set `VERSION` when you want a different artifact name:
+
+```sh
+VERSION=0.1.1 just package
 ```
 
 Artifacts are written to:
 
-- `dist/STFU-0.1.0.pkg`
-- `dist/STFU-0.1.0.dmg`
+- `dist/STFU-$VERSION.pkg`
+- `dist/STFU-$VERSION.dmg`
 
 The default artwork is `assets/pulpfiction_new.webp`. To use different artwork:
 
@@ -103,37 +117,34 @@ ARTWORK_PATH=/path/to/image.webp scripts/package.sh
 
 Use artwork you have rights to distribute.
 
-Use `VERSION` to build a different release version:
-
-```sh
-VERSION=0.1.1 scripts/package.sh
-```
-
 Verify local artifacts:
 
 ```sh
-hdiutil verify dist/STFU-0.1.0.dmg
-pkgutil --payload-files dist/STFU-0.1.0.pkg
+VERSION=0.1.0
+hdiutil verify "dist/STFU-$VERSION.dmg"
+pkgutil --payload-files "dist/STFU-$VERSION.pkg"
 ```
 
 ## Publish a GitHub Release
 
-This repo includes a GitHub Actions release workflow. After pushing the repo to GitHub, create a version tag:
+The local release script is the authoritative path for publishing a GitHub Release. It builds, verifies, tags, pushes, and uploads the DMG/pkg with release notes:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+VERSION=0.1.0 just release
 ```
 
-The workflow builds the DMG on macOS and uploads `STFU-0.1.0.dmg` plus `STFU-0.1.0.pkg` to the GitHub Release.
-
-Manual release from a local machine also works:
+If a tag already exists and you intentionally want to replace it:
 
 ```sh
-scripts/package.sh
-gh release create v0.1.0 dist/STFU-0.1.0.dmg dist/STFU-0.1.0.pkg \
-  --title "STFU 0.1.0" \
-  --notes "Initial STFU release."
+FORCE=1 VERSION=0.1.0 just release
+```
+
+The GitHub Actions workflow also builds and verifies the package on macOS for pushed tags and manual runs. It uploads CI artifacts to the workflow run; it does not mutate the GitHub Release.
+
+You need the GitHub CLI authenticated for the local release script:
+
+```sh
+gh auth login
 ```
 
 For public distribution, sign and notarize the build:
@@ -145,3 +156,7 @@ DMG_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARY_PROFILE="notarytool-keychain-profile" \
 scripts/package.sh
 ```
+
+## License and Artwork
+
+Source code is MIT licensed. The bundled prototype artwork is user-provided for this private project; replace it with artwork you have rights to distribute before making a public release.

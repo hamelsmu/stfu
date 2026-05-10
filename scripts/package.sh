@@ -88,7 +88,6 @@ chmod 755 "$PAYLOAD_DIR/usr/local/bin/stfu"
 
 cat > "$SCRIPTS_DIR/postinstall" <<'POSTINSTALL'
 #!/bin/sh
-/usr/bin/open -a "/Applications/STFU.app" >/dev/null 2>&1 || true
 exit 0
 POSTINSTALL
 chmod 755 "$SCRIPTS_DIR/postinstall"
@@ -154,11 +153,15 @@ Find the app or browser tab making noise and make it STFU.
 
 1. Open "Install STFU.pkg".
 2. Open STFU.
-3. If a Chrome row says it needs Accessibility, click "Open Settings".
+3. If a browser row says it needs Accessibility, click "Open Settings".
 4. In System Settings > Privacy & Security > Accessibility, turn on STFU.
 
 Unsigned build: if macOS blocks the installer, Control-click it and choose Open.
 Accessibility lets STFU see browser tabs so it can close the noisy tab instead of the whole browser.
+macOS may also ask for Automation permission when STFU controls a browser.
+
+To check setup from Terminal, run:
+  stfu --doctor
 
 The installer adds:
 - /Applications/STFU.app

@@ -215,17 +215,53 @@ func runCommand(_ launchPath: String, _ arguments: [String]) -> CommandResult {
     let stderr = Pipe()
     process.standardOutput = stdout
     process.standardError = stderr
+    let stdoutBox = DataBox()
+    let stderrBox = DataBox()
+    let outputGroup = DispatchGroup()
+
+    outputGroup.enter()
+    DispatchQueue.global(qos: .utility).async {
+        stdoutBox.set(stdout.fileHandleForReading.readDataToEndOfFile())
+        outputGroup.leave()
+    }
+
+    outputGroup.enter()
+    DispatchQueue.global(qos: .utility).async {
+        stderrBox.set(stderr.fileHandleForReading.readDataToEndOfFile())
+        outputGroup.leave()
+    }
 
     do {
         try process.run()
         process.waitUntilExit()
     } catch {
+        stdout.fileHandleForReading.closeFile()
+        stderr.fileHandleForReading.closeFile()
+        outputGroup.wait()
         return CommandResult(status: 127, output: "", error: String(describing: error))
     }
 
-    let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    let error = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    outputGroup.wait()
+    let output = String(data: stdoutBox.value(), encoding: .utf8) ?? ""
+    let error = String(data: stderrBox.value(), encoding: .utf8) ?? ""
     return CommandResult(status: process.terminationStatus, output: output, error: error)
+}
+
+final class DataBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func set(_ newData: Data) {
+        lock.lock()
+        data = newData
+        lock.unlock()
+    }
+
+    func value() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
 }
 
 func runAppleScript(_ source: String) -> CommandResult {
@@ -1104,11 +1140,11 @@ func closeOffender(_ offender: SoundOffender) -> Bool {
 @MainActor
 final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private var window: NSWindow?
-    private let statusLabel = NSTextField(labelWithString: "Scanning the noise suspects...")
+    private let statusLabel = NSTextField(labelWithString: "Scanning sound sources...")
     private let hintLabel = NSTextField(wrappingLabelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let emptyLabel = NSTextField(labelWithString: "Blessed silence. Nobody is yapping right now.")
+    private let emptyLabel = NSTextField(labelWithString: "No active sound sources.")
     private lazy var closeAllButton: NSButton = {
         let button = NSButton(title: "STFU Everything", target: self, action: #selector(closeAll))
         button.bezelStyle = .rounded
@@ -1168,7 +1204,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         emptyLabel.isHidden = true
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let refreshButton = NSButton(title: "Refresh the Suspects", target: self, action: #selector(refreshAction))
+        let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshAction))
         refreshButton.bezelStyle = .rounded
         refreshButton.contentTintColor = stfuYellow()
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1231,12 +1267,12 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         tableView.gridColor = NSColor(calibratedWhite: 0.18, alpha: 1)
 
         let offenderColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("offender"))
-        offenderColumn.title = "Offender"
+        offenderColumn.title = "Source"
         offenderColumn.width = 190
         tableView.addTableColumn(offenderColumn)
 
         let detailColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("detail"))
-        detailColumn.title = "Charge"
+        detailColumn.title = "Detected audio"
         detailColumn.width = 340
         tableView.addTableColumn(detailColumn)
 
@@ -1260,7 +1296,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         closeAllButton.isHidden = offenders.filter(isClosable).count < 2
 
         if offenders.isEmpty {
-            statusLabel.stringValue = "No active noise crimes detected."
+            statusLabel.stringValue = "No active sound sources."
             statusLabel.textColor = .systemGreen
             hintLabel.stringValue = ""
             return
@@ -1273,7 +1309,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             return false
         }
 
-        statusLabel.stringValue = "\(offenders.count) sound offender\(offenders.count == 1 ? "" : "s")"
+        statusLabel.stringValue = "\(offenders.count) sound source\(offenders.count == 1 ? "" : "s")"
         statusLabel.textColor = stfuRed()
         if needsAccessibility {
             hintLabel.stringValue = "A browser source needs Accessibility for this STFU build. If STFU already looks enabled, toggle it off and on once."
@@ -1447,7 +1483,25 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         guard sender.tag >= 0, sender.tag < offenders.count else {
             return
         }
-        _ = closeOffender(offenders[sender.tag])
+        closeOffenderFromUI(offenders[sender.tag])
+    }
+
+    private func closeOffenderFromUI(_ offender: SoundOffender) {
+        if case .app = offender.kind {
+            confirmQuitApp(offender) { confirmed in
+                guard confirmed else { return }
+                Task { @MainActor in
+                    self.performClose(offender)
+                }
+            }
+            return
+        }
+
+        performClose(offender)
+    }
+
+    private func performClose(_ offender: SoundOffender) {
+        _ = closeOffender(offender)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.refreshStatus()
         }
@@ -1459,12 +1513,86 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             NSSound.beep()
             return
         }
-        for offender in targets {
-            _ = closeOffender(offender)
-            usleep(120_000)
+
+        confirmCloseAll(targets) { confirmed in
+            guard confirmed else { return }
+            Task { @MainActor in
+                self.closeAllButton.isEnabled = false
+                self.closeNextOffender(
+                    allowedKeys: Set(targets.map { self.closeKey(for: $0) }),
+                    attempted: []
+                )
+            }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            self.refreshStatus()
+    }
+
+    private func closeNextOffender(allowedKeys: Set<String>, attempted: Set<String>) {
+        let current = soundOffenders().filter { offender in
+            isClosable(offender) && allowedKeys.contains(closeKey(for: offender))
+        }
+        guard let offender = current.first(where: { !attempted.contains(closeKey(for: $0)) }) else {
+            closeAllButton.isEnabled = true
+            refreshStatus()
+            return
+        }
+
+        var nextAttempted = attempted
+        nextAttempted.insert(closeKey(for: offender))
+        _ = closeOffender(offender)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.closeNextOffender(allowedKeys: allowedKeys, attempted: nextAttempted)
+        }
+    }
+
+    private func closeKey(for offender: SoundOffender) -> String {
+        switch offender.kind {
+        case let .safariTab(pid):
+            return "safari:\(pid)"
+        case let .chromiumTab(appName, app, _, _):
+            return "chromium:\(appName):\(app.processIdentifier):\(offender.name):\(offender.detail)"
+        case let .unresolvedBrowser(appName, app):
+            return "unresolved:\(appName):\(app.processIdentifier)"
+        case let .app(process):
+            return "app:\(process.pid)"
+        case let .blockedBrowser(appName):
+            return "blocked:\(appName)"
+        }
+    }
+
+    private func confirmQuitApp(_ offender: SoundOffender, completion: @escaping (Bool) -> Void) {
+        guard let window else {
+            completion(false)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Quit \(offender.name)?"
+        alert.informativeText = "STFU will quit this app to stop its audio."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit App")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            completion(response == .alertFirstButtonReturn)
+        }
+    }
+
+    private func confirmCloseAll(_ targets: [SoundOffender], completion: @escaping (Bool) -> Void) {
+        guard let window else {
+            completion(false)
+            return
+        }
+
+        let visibleNames = targets.prefix(5).map(\.name).joined(separator: ", ")
+        let suffix = targets.count > 5 ? ", and \(targets.count - 5) more" : ""
+
+        let alert = NSAlert()
+        alert.messageText = "STFU everything?"
+        alert.informativeText = "This will close browser tabs and quit apps currently producing sound: \(visibleNames)\(suffix)."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "STFU Everything")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            completion(response == .alertFirstButtonReturn)
         }
     }
 
