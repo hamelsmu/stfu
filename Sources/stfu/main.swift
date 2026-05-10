@@ -1,3 +1,9 @@
 import STFULib
 
-runSTFU()
+@main
+struct STFUCommand {
+    @MainActor
+    static func main() {
+        runSTFU()
+    }
+}

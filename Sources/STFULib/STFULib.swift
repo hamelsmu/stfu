@@ -198,7 +198,9 @@ func outputAudioProcesses() throws -> [AudioProcess] {
             continue
         }
 
-        let pid = try audioPID(objectID: objectID)
+        guard let pid = try? audioPID(objectID: objectID) else {
+            continue
+        }
         processes.append(AudioProcess(
             objectID: objectID,
             pid: pid,
@@ -559,6 +561,9 @@ func axWindows(_ appElement: AXUIElement) -> [AXUIElement] {
     guard let focusedValue = axAttribute(appElement, kAXFocusedWindowAttribute as CFString) else {
         return windows
     }
+    guard CFGetTypeID(focusedValue as CFTypeRef) == AXUIElementGetTypeID() else {
+        return windows
+    }
     let focused = focusedValue as! AXUIElement
 
     var ordered = [focused]
@@ -566,6 +571,15 @@ func axWindows(_ appElement: AXUIElement) -> [AXUIElement] {
         ordered.append(window)
     }
     return ordered
+}
+
+func focusedWindow(for app: NSRunningApplication) -> AXUIElement? {
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    guard let focusedValue = axAttribute(appElement, kAXFocusedWindowAttribute as CFString),
+          CFGetTypeID(focusedValue as CFTypeRef) == AXUIElementGetTypeID() else {
+        return nil
+    }
+    return (focusedValue as! AXUIElement)
 }
 
 func axOwnText(_ element: AXUIElement) -> [String] {
@@ -724,9 +738,53 @@ func findAudibleTabs(in root: AXUIElement, verbose: Bool) -> [AXAudibleTab] {
     return matches
 }
 
-func sendCommandW(to app: NSRunningApplication) -> Bool {
+func isFrontmost(_ app: NSRunningApplication) -> Bool {
+    NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+}
+
+func waitUntilFrontmost(_ app: NSRunningApplication, timeout: TimeInterval = 1.0) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if isFrontmost(app) {
+            return true
+        }
+        usleep(50_000)
+    }
+    return isFrontmost(app)
+}
+
+func activateAndConfirmFrontmost(_ app: NSRunningApplication, timeout: TimeInterval = 1.0) -> Bool {
     app.activate()
-    usleep(200_000)
+    return waitUntilFrontmost(app, timeout: timeout)
+}
+
+func waitUntilFocusedWindow(
+    _ window: AXUIElement,
+    in app: NSRunningApplication,
+    timeout: TimeInterval = 0.8
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if let focused = focusedWindow(for: app), CFEqual(focused, window) {
+            return true
+        }
+        usleep(50_000)
+    }
+    guard let focused = focusedWindow(for: app) else {
+        return false
+    }
+    return CFEqual(focused, window)
+}
+
+func sendCommandW(to app: NSRunningApplication, expectedWindow: AXUIElement? = nil) -> Bool {
+    guard activateAndConfirmFrontmost(app) else {
+        fputs("Could not confirm target app is frontmost; leaving current window untouched.\n", stderr)
+        return false
+    }
+    if let expectedWindow, !waitUntilFocusedWindow(expectedWindow, in: app, timeout: 0.2) {
+        fputs("Could not confirm target browser window is focused; leaving current window untouched.\n", stderr)
+        return false
+    }
 
     guard let source = CGEventSource(stateID: .hidSystemState),
           let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 13, keyDown: true),
@@ -741,8 +799,13 @@ func sendCommandW(to app: NSRunningApplication) -> Bool {
     return true
 }
 
-func closeActiveChromiumTab(appName: String, app: NSRunningApplication, label: String) -> Bool {
-    if sendCommandW(to: app) {
+func closeActiveChromiumTab(
+    appName: String,
+    app: NSRunningApplication,
+    window: AXUIElement,
+    label: String
+) -> Bool {
+    if sendCommandW(to: app, expectedWindow: window) {
         print("Closed \(appName) tab via Accessibility: \(label)")
         return true
     }
@@ -784,7 +847,14 @@ func closeChromiumAudibleTabWithAccessibility(
             return true
         }
 
-        _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        let raiseError = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        guard raiseError == .success else {
+            if verbose {
+                print("Raising \(appName) window returned Accessibility error \(raiseError.rawValue).")
+            }
+            fputs("Could not confirm the intended \(appName) window; leaving browser untouched.\n", stderr)
+            return false
+        }
         let pressError = AXUIElementPerformAction(candidate.element, kAXPressAction as CFString)
         if pressError != .success {
             if verbose {
@@ -794,16 +864,29 @@ func closeChromiumAudibleTabWithAccessibility(
             return false
         }
         usleep(200_000)
-        return closeActiveChromiumTab(appName: appName, app: app, label: candidate.label)
+        guard waitUntilFocusedWindow(window, in: app) else {
+            fputs("Could not confirm the intended \(appName) window is focused; leaving browser untouched.\n", stderr)
+            return false
+        }
+        return closeActiveChromiumTab(appName: appName, app: app, window: window, label: candidate.label)
     }
 
     return false
 }
 
 func focusChromiumTab(app: NSRunningApplication, window: AXUIElement, tab: AXUIElement) -> Bool {
-    app.activate()
-    _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-    return AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+    guard activateAndConfirmFrontmost(app) else {
+        return false
+    }
+    guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else {
+        return false
+    }
+    guard AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success else {
+        return false
+    }
+    usleep(100_000)
+    return waitUntilFrontmost(app, timeout: 0.5)
+        && waitUntilFocusedWindow(window, in: app)
 }
 
 func audibleChromiumTabs(app: NSRunningApplication, verbose: Bool = false) -> [AXAudibleTab] {
@@ -828,7 +911,7 @@ func runningChromiumApplication(_ snapshot: ChromiumTabSnapshot) -> NSRunningApp
        app.bundleIdentifier == snapshot.bundleID {
         return app
     }
-    return runningApplication(bundleID: snapshot.bundleID)
+    return nil
 }
 
 func chromiumTabMatches(_ snapshot: ChromiumTabSnapshot, _ candidate: ChromiumTabCandidate) -> Bool {
@@ -977,38 +1060,61 @@ func closeApplication(_ process: AudioProcess, dryRun: Bool, waitForExit: Bool =
         return true
     }
 
-    if let app = NSRunningApplication(processIdentifier: process.pid) {
-        let didTerminate = app.terminate()
-        if didTerminate, !waitForExit {
-            print("Asked app to quit: \(process.name) [pid \(process.pid)]")
-            return true
-        }
-        if didTerminate, waitForProcessExit(pid: process.pid, timeout: 2.0) {
-            print("Closed app: \(process.name) [pid \(process.pid)]")
-            return true
-        }
-        if didTerminate {
-            print("Asked app to quit: \(process.name) [pid \(process.pid)]")
-            return true
-        }
-    }
-
-    let result = runCommand("/bin/kill", ["-TERM", "\(process.pid)"])
-    if result.status == 0, !waitForExit {
-        print("Asked process to terminate: \(process.name) [pid \(process.pid)]")
-        return true
-    }
-    if result.status == 0, waitForProcessExit(pid: process.pid, timeout: 2.0) {
-        print("Terminated process: \(process.name) [pid \(process.pid)]")
-        return true
-    }
-    if result.status == 0 {
-        fputs("Asked \(process.name) [pid \(process.pid)] to quit, but it is still running.\n", stderr)
+    guard let current = currentAudioProcess(matching: process) else {
+        fputs("\(process.name) [pid \(process.pid)] is no longer the same active audio source; leaving it untouched.\n", stderr)
         return false
     }
 
-    fputs("Failed to close \(process.name) [pid \(process.pid)]: \(result.error)\n", stderr)
+    if let app = NSRunningApplication(processIdentifier: current.pid),
+       application(app, matches: current) {
+        let didTerminate = app.terminate()
+        if didTerminate, !waitForExit {
+            print("Asked app to quit: \(current.name) [pid \(current.pid)]")
+            return true
+        }
+        if didTerminate, waitForProcessExit(pid: current.pid, timeout: 2.0) {
+            print("Closed app: \(current.name) [pid \(current.pid)]")
+            return true
+        }
+        if didTerminate {
+            print("Asked app to quit: \(current.name) [pid \(current.pid)]")
+            return true
+        }
+    }
+
+    let result = runCommand("/bin/kill", ["-TERM", "\(current.pid)"])
+    if result.status == 0, !waitForExit {
+        print("Asked process to terminate: \(current.name) [pid \(current.pid)]")
+        return true
+    }
+    if result.status == 0, waitForProcessExit(pid: current.pid, timeout: 2.0) {
+        print("Terminated process: \(current.name) [pid \(current.pid)]")
+        return true
+    }
+    if result.status == 0 {
+        fputs("Asked \(current.name) [pid \(current.pid)] to quit, but it is still running.\n", stderr)
+        return false
+    }
+
+    fputs("Failed to close \(current.name) [pid \(current.pid)]: \(result.error)\n", stderr)
     return false
+}
+
+func currentAudioProcess(matching snapshot: AudioProcess) -> AudioProcess? {
+    guard let current = (try? outputAudioProcesses())?.first(where: { $0.pid == snapshot.pid }) else {
+        return nil
+    }
+    if let bundleID = snapshot.bundleID {
+        return current.bundleID == bundleID ? current : nil
+    }
+    return current.name == snapshot.name ? current : nil
+}
+
+func application(_ app: NSRunningApplication, matches process: AudioProcess) -> Bool {
+    if let bundleID = process.bundleID {
+        return app.bundleIdentifier == bundleID
+    }
+    return (app.localizedName ?? app.bundleIdentifier ?? "pid \(process.pid)") == process.name
 }
 
 func processExists(pid: pid_t) -> Bool {
@@ -1429,7 +1535,12 @@ func closeOffender(_ offender: SoundOffender, waitForAppExit: Bool = true) -> Bo
             return false
         }
         usleep(150_000)
-        return closeActiveChromiumTab(appName: snapshot.appName, app: resolved.app, label: offender.detail)
+        return closeActiveChromiumTab(
+            appName: snapshot.appName,
+            app: resolved.app,
+            window: resolved.tab.window,
+            label: offender.detail
+        )
     case .unresolvedBrowser:
         return false
     case let .app(process):
@@ -1448,9 +1559,8 @@ func offenderCloseKey(for offender: SoundOffender) -> String {
     case let .safariTab(pid):
         return "safari:\(pid)"
     case let .chromiumTab(snapshot):
-        let tabIndex = snapshot.tabIndex.map(String.init) ?? "-"
         let detail = snapshot.title.isEmpty ? snapshot.label : snapshot.title
-        return "chromium:\(snapshot.bundleID):\(snapshot.appPID):\(tabIndex):\(detail)"
+        return "chromium:\(snapshot.bundleID):\(snapshot.appPID):\(detail)"
     case let .unresolvedBrowser(snapshot):
         return "unresolved:\(snapshot.bundleID):\(snapshot.pid)"
     case let .app(process):
@@ -1459,6 +1569,21 @@ func offenderCloseKey(for offender: SoundOffender) -> String {
         return "accessibility:\(bundleID)"
     case let .blockedAutomation(snapshot):
         return "automation:\(snapshot.bundleID):\(snapshot.pid)"
+    }
+}
+
+func offenderCloseKeyCounts(for offenders: [SoundOffender]) -> [String: Int] {
+    offenders.reduce(into: [:]) { counts, offender in
+        counts[offenderCloseKey(for: offender), default: 0] += 1
+    }
+}
+
+func isOffenderClosable(_ offender: SoundOffender) -> Bool {
+    switch offender.kind {
+    case .safariTab, .chromiumTab, .app:
+        return true
+    case .unresolvedBrowser, .blockedBrowser, .blockedAutomation:
+        return false
     }
 }
 
@@ -1717,12 +1842,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func isClosable(_ offender: SoundOffender) -> Bool {
-        switch offender.kind {
-        case .safariTab, .chromiumTab, .app:
-            return true
-        case .unresolvedBrowser, .blockedBrowser, .blockedAutomation:
-            return false
-        }
+        isOffenderClosable(offender)
     }
 
     private func focusTitle(for offender: SoundOffender) -> String? {
@@ -1856,14 +1976,25 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             NSSound.beep()
             return
         }
-        _ = focusOffender(offender)
+        performFocus(offender)
     }
 
     @objc private func focusRowButton(_ sender: NSButton) {
         guard sender.tag >= 0, sender.tag < offenders.count else {
             return
         }
-        _ = focusOffender(offenders[sender.tag])
+        performFocus(offenders[sender.tag])
+    }
+
+    private func performFocus(_ offender: SoundOffender) {
+        switch offender.kind {
+        case .blockedBrowser, .blockedAutomation:
+            _ = focusOffender(offender)
+        default:
+            Task.detached(priority: .userInitiated) {
+                _ = focusOffender(offender)
+            }
+        }
     }
 
     @objc private func closeRowButton(_ sender: NSButton) {
@@ -1874,7 +2005,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func closeOffenderFromUI(_ offender: SoundOffender) {
-        if case .app = offender.kind {
+        switch offender.kind {
+        case .app:
             confirmQuitApp(offender) { confirmed in
                 guard confirmed else { return }
                 Task { @MainActor in
@@ -1882,15 +2014,24 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
                 }
             }
             return
+        case .blockedBrowser, .blockedAutomation:
+            _ = closeOffender(offender, waitForAppExit: false)
+            return
+        case .safariTab, .chromiumTab, .unresolvedBrowser:
+            break
         }
 
         performClose(offender)
     }
 
     private func performClose(_ offender: SoundOffender) {
-        _ = closeOffender(offender, waitForAppExit: false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.refreshStatus()
+        Task.detached(priority: .userInitiated) {
+            _ = closeOffender(offender, waitForAppExit: false)
+            await MainActor.run {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.refreshStatus()
+                }
+            }
         }
     }
 
@@ -1906,50 +2047,54 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             Task { @MainActor in
                 self.closeAllButton.isEnabled = false
                 self.closeNextOffender(
-                    allowedKeys: Set(targets.map { self.closeKey(for: $0) }),
-                    attempted: []
+                    remainingKeys: self.closeKeyCounts(for: targets)
                 )
             }
         }
     }
 
-    private func closeNextOffender(allowedKeys: Set<String>, attempted: Set<String>) {
+    private func closeNextOffender(remainingKeys: [String: Int]) {
         Task.detached(priority: .userInitiated) {
             let current = (try? soundOffenders()) ?? []
+            let currentTargets = current.filter { offender in
+                isOffenderClosable(offender) && (remainingKeys[offenderCloseKey(for: offender)] ?? 0) > 0
+            }
+
+            guard let offender = currentTargets.first else {
+                await MainActor.run {
+                    self.closeAllButton.isEnabled = true
+                    self.refreshStatus()
+                }
+                return
+            }
+
+            let key = offenderCloseKey(for: offender)
+            var nextRemainingKeys = remainingKeys
+            guard closeOffender(offender, waitForAppExit: false) else {
+                await MainActor.run {
+                    self.closeAllButton.isEnabled = true
+                    self.refreshStatus()
+                }
+                return
+            }
+
+            let remaining = (nextRemainingKeys[key] ?? 1) - 1
+            if remaining > 0 {
+                nextRemainingKeys[key] = remaining
+            } else {
+                nextRemainingKeys.removeValue(forKey: key)
+            }
+
             await MainActor.run {
-                self.closeNextOffender(
-                    current: current,
-                    allowedKeys: allowedKeys,
-                    attempted: attempted
-                )
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.closeNextOffender(remainingKeys: nextRemainingKeys)
+                }
             }
         }
     }
 
-    private func closeNextOffender(
-        current: [SoundOffender],
-        allowedKeys: Set<String>,
-        attempted: Set<String>
-    ) {
-        let current = current.filter { offender in
-            isClosable(offender) && allowedKeys.contains(closeKey(for: offender))
-        }
-        guard let offender = current.first(where: { !attempted.contains(closeKey(for: $0)) }) else {
-            closeAllButton.isEnabled = true
-            refreshStatus()
-            return
-        }
-
-        var nextAttempted = attempted
-        nextAttempted.insert(closeKey(for: offender))
-        _ = closeOffender(offender, waitForAppExit: false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.closeNextOffender(allowedKeys: allowedKeys, attempted: nextAttempted)
-        }
-    }
-
-    private func closeKey(for offender: SoundOffender) -> String {
-        offenderCloseKey(for: offender)
+    private func closeKeyCounts(for offenders: [SoundOffender]) -> [String: Int] {
+        offenderCloseKeyCounts(for: offenders)
     }
 
     private func confirmQuitApp(_ offender: SoundOffender, completion: @escaping (Bool) -> Void) {
@@ -2008,11 +2153,10 @@ func runSetupApp() {
     app.run()
 }
 
+@MainActor
 public func runSTFU() {
     if shouldRunSetupApp() {
-        MainActor.assumeIsolated {
-            runSetupApp()
-        }
+        runSetupApp()
         exit(0)
     }
 

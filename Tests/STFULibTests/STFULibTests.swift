@@ -90,8 +90,38 @@ final class STFULibTests: XCTestCase {
 
         XCTAssertEqual(
             offenderCloseKey(for: offender),
-            "chromium:com.google.Chrome:42:2:Example Video"
+            "chromium:com.google.Chrome:42:Example Video"
         )
+    }
+
+    func testCloseKeySurvivesChromiumTabRenumbering() {
+        let before = SoundOffender(
+            name: "Google Chrome Tab 2",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 2, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+        let after = SoundOffender(
+            name: "Google Chrome Tab 1",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 1, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+
+        XCTAssertEqual(offenderCloseKey(for: before), offenderCloseKey(for: after))
+    }
+
+    func testCloseKeyCountsKeepDuplicateApprovedTabs() {
+        let first = SoundOffender(
+            name: "Google Chrome Tab 1",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 1, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+        let second = SoundOffender(
+            name: "Google Chrome Tab 2",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 2, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+
+        XCTAssertEqual(offenderCloseKeyCounts(for: [first, second])[offenderCloseKey(for: first)], 2)
     }
 
     func testChromiumTabSelectionReturnsOneExactMatch() {
