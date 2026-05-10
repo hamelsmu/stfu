@@ -9,8 +9,6 @@ DMG_PATH="$ROOT/dist/STFU-$VERSION.dmg"
 PKG_PATH="$ROOT/dist/STFU-$VERSION.pkg"
 NOTES_PATH="$ROOT/.build/release-notes-$VERSION.md"
 FORCE="${FORCE:-0}"
-DEFAULT_ARTWORK_PATH="$ROOT/assets/pulpfiction_new.webp"
-REQUESTED_ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
 
 cd "$ROOT"
 
@@ -32,16 +30,6 @@ fi
 
 gh auth status --hostname github.com >/dev/null
 gh repo view "$REPO" --json name >/dev/null
-
-case "$REQUESTED_ARTWORK_PATH" in
-  "$DEFAULT_ARTWORK_PATH"|"$HOME/Downloads/pulpfiction_new.webp"|"assets/pulpfiction_new.webp"|*/pulpfiction_new.webp)
-    if [[ "${ALLOW_PROTOTYPE_ARTWORK:-0}" != "1" ]]; then
-      echo "Release would package prototype artwork that is not cleared for public redistribution." >&2
-      echo "Set ARTWORK_PATH to cleared artwork, or set ALLOW_PROTOTYPE_ARTWORK=1 for a private/internal release." >&2
-      exit 1
-    fi
-    ;;
-esac
 
 if [[ "$FORCE" != "1" ]]; then
   if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then

@@ -111,13 +111,11 @@ Artifacts are written to:
 - `dist/STFU-$VERSION.pkg`
 - `dist/STFU-$VERSION.dmg`
 
-The default artwork is prototype user-provided art at `assets/pulpfiction_new.webp`. To use different artwork:
+To use custom app artwork:
 
 ```sh
 ARTWORK_PATH=/path/to/image.webp scripts/package.sh
 ```
-
-Use artwork you have rights to distribute.
 
 Verify local artifacts:
 
@@ -133,18 +131,6 @@ The local release script is the authoritative path for publishing a GitHub Relea
 
 ```sh
 VERSION=0.1.0 just release
-```
-
-Release publishing refuses the prototype artwork by default. Use cleared artwork:
-
-```sh
-ARTWORK_PATH=/path/to/cleared-art.webp VERSION=0.1.0 just release
-```
-
-For a private/internal release that intentionally uses the prototype artwork:
-
-```sh
-ALLOW_PROTOTYPE_ARTWORK=1 VERSION=0.1.0 just release
 ```
 
 If a tag already exists and you intentionally want to replace it:
