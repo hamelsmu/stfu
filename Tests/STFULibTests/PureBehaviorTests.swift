@@ -85,4 +85,42 @@ final class PureBehaviorTests: XCTestCase {
         ))
     }
 
+    func testCloseKeyShapeDocumentsCloseAllIdentityContract() {
+        XCTAssertEqual(
+            closeKey(for: SoundOffender(name: "Safari tab", detail: "Example", kind: .safariTab(301))),
+            "safari:301"
+        )
+        XCTAssertEqual(
+            closeKey(for: SoundOffender(
+                name: "Music",
+                detail: "App audio source",
+                kind: .app(AudioProcess(objectID: 0, pid: 302, bundleID: "com.apple.Music", name: "Music"))
+            )),
+            "app:302"
+        )
+        XCTAssertEqual(
+            closeKey(for: SoundOffender(
+                name: "Google Chrome",
+                detail: "Needs Accessibility.",
+                kind: .blockedBrowser(appName: "Google Chrome", bundleID: "com.google.Chrome")
+            )),
+            "blocked:Google Chrome:com.google.Chrome"
+        )
+        XCTAssertEqual(
+            closeKey(for: SoundOffender(
+                name: "Google Chrome Tab 2",
+                detail: "Example Video",
+                kind: .chromiumTab(
+                    appName: "Google Chrome",
+                    bundleID: "com.google.Chrome",
+                    appPID: 304,
+                    tabIndex: 2,
+                    title: "Example Video",
+                    label: "Example Video - Audio playing"
+                )
+            )),
+            "chromium:Google Chrome:com.google.Chrome:304:2:Example Video"
+        )
+    }
+
 }

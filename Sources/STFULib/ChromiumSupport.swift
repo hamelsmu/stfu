@@ -362,8 +362,11 @@ func closeChromiumAudibleTabWithAccessibility(
 
         _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         let pressError = AXUIElementPerformAction(candidate.element, kAXPressAction as CFString)
-        if pressError != .success, verbose {
-            print("Selecting \(appName) tab returned Accessibility error \(pressError.rawValue).")
+        guard pressError == .success else {
+            if verbose {
+                print("Selecting \(appName) tab returned Accessibility error \(pressError.rawValue); leaving tabs untouched.")
+            }
+            return false
         }
         usleep(200_000)
         return closeActiveChromiumTab(appName: appName, app: app, label: candidate.label)

@@ -72,15 +72,22 @@ final class STFUPulpHeroView: NSView {
     }
 }
 
-enum OffenderKind {
+enum OffenderKind: Sendable {
     case safariTab(pid_t)
-    case chromiumTab(appName: String, app: NSRunningApplication, window: AXUIElement, tab: AXUIElement)
-    case unresolvedBrowser(appName: String, app: NSRunningApplication)
+    case chromiumTab(
+        appName: String,
+        bundleID: String,
+        appPID: pid_t,
+        tabIndex: Int?,
+        title: String,
+        label: String
+    )
+    case unresolvedBrowser(appName: String, bundleID: String, appPID: pid_t)
     case app(AudioProcess)
-    case blockedBrowser(appName: String)
+    case blockedBrowser(appName: String, bundleID: String)
 }
 
-final class SoundOffender {
+struct SoundOffender: Sendable {
     let name: String
     let detail: String
     let kind: OffenderKind
@@ -109,7 +116,11 @@ func soundOffenders() throws -> [SoundOffender] {
                 offenders.append(SoundOffender(
                     name: "Safari",
                     detail: "Needs browser Automation permission to identify the noisy tab.",
-                    kind: .unresolvedBrowser(appName: "Safari", app: safariApp)
+                    kind: .unresolvedBrowser(
+                        appName: "Safari",
+                        bundleID: "com.apple.Safari",
+                        appPID: safariApp.processIdentifier
+                    )
                 ))
             }
             continue
@@ -131,19 +142,26 @@ func soundOffenders() throws -> [SoundOffender] {
                     offenders.append(SoundOffender(
                         name: chromium.name,
                         detail: "Audio detected, but no noisy tab indicator was visible.",
-                        kind: .unresolvedBrowser(appName: chromium.name, app: app)
+                        kind: .unresolvedBrowser(
+                            appName: chromium.name,
+                            bundleID: chromium.bundleID,
+                            appPID: app.processIdentifier
+                        )
                     ))
                 } else {
                     for tab in tabs {
                         let tabNumber = tab.index.map { "Tab \($0)" } ?? "Tab"
+                        let detail = tab.title.isEmpty ? tab.label : tab.title
                         offenders.append(SoundOffender(
                             name: "\(chromium.name) \(tabNumber)",
-                            detail: tab.title.isEmpty ? tab.label : tab.title,
+                            detail: detail,
                             kind: .chromiumTab(
                                 appName: chromium.name,
-                                app: app,
-                                window: tab.window,
-                                tab: tab.element
+                                bundleID: chromium.bundleID,
+                                appPID: app.processIdentifier,
+                                tabIndex: tab.index,
+                                title: tab.title,
+                                label: tab.label
                             )
                         ))
                     }
@@ -152,7 +170,7 @@ func soundOffenders() throws -> [SoundOffender] {
                 offenders.append(SoundOffender(
                     name: chromium.name,
                     detail: "Needs Accessibility to identify noisy browser tabs.",
-                    kind: .blockedBrowser(appName: chromium.name)
+                    kind: .blockedBrowser(appName: chromium.name, bundleID: chromium.bundleID)
                 ))
             }
         }
@@ -171,14 +189,60 @@ func soundOffenders() throws -> [SoundOffender] {
     return offenders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
+@MainActor
+func browserApplication(bundleID: String, appPID: pid_t) -> NSRunningApplication? {
+    if let app = NSRunningApplication(processIdentifier: appPID),
+       app.bundleIdentifier == bundleID {
+        return app
+    }
+    return runningApplication(bundleID: bundleID)
+}
+
+func matchesChromiumTab(_ tab: AXAudibleTab, offender: SoundOffender) -> Bool {
+    guard case let .chromiumTab(_, _, _, tabIndex, title, label) = offender.kind else {
+        return false
+    }
+
+    let indexMatches = tabIndex == nil || tab.index == tabIndex
+    let titleMatches = !title.isEmpty && tab.title == title
+    let labelMatches = !label.isEmpty && tab.label == label
+    let detailMatches = tab.title == offender.detail || tab.label == offender.detail
+
+    return indexMatches && (titleMatches || labelMatches || detailMatches)
+}
+
+@MainActor
+func resolveChromiumTab(for offender: SoundOffender) -> (app: NSRunningApplication, tab: AXAudibleTab)? {
+    guard case let .chromiumTab(_, bundleID, appPID, _, _, _) = offender.kind,
+          let app = browserApplication(bundleID: bundleID, appPID: appPID) else {
+        return nil
+    }
+
+    let tabs = audibleChromiumTabs(app: app)
+    if let exact = tabs.first(where: { matchesChromiumTab($0, offender: offender) }) {
+        return (app, exact)
+    }
+    if tabs.count == 1, let only = tabs.first {
+        return (app, only)
+    }
+    return nil
+}
+
 @discardableResult
+@MainActor
 func focusOffender(_ offender: SoundOffender) -> Bool {
     switch offender.kind {
     case let .safariTab(pid):
         return focusSafariTab(pid: pid)
-    case let .chromiumTab(_, app, window, tab):
-        return focusChromiumTab(app: app, window: window, tab: tab)
-    case let .unresolvedBrowser(_, app):
+    case .chromiumTab:
+        guard let resolved = resolveChromiumTab(for: offender) else {
+            return false
+        }
+        return focusChromiumTab(app: resolved.app, window: resolved.tab.window, tab: resolved.tab.element)
+    case let .unresolvedBrowser(_, bundleID, appPID):
+        guard let app = browserApplication(bundleID: bundleID, appPID: appPID) else {
+            return false
+        }
         app.activate()
         return true
     case let .app(process):
@@ -194,14 +258,19 @@ func focusOffender(_ offender: SoundOffender) -> Bool {
 }
 
 @discardableResult
+@MainActor
 func closeOffender(_ offender: SoundOffender) -> Bool {
     switch offender.kind {
     case let .safariTab(pid):
         return closeSafariTab(pid: pid, dryRun: false)
-    case let .chromiumTab(appName, app, window, tab):
-        _ = focusChromiumTab(app: app, window: window, tab: tab)
+    case let .chromiumTab(appName, _, _, _, _, _):
+        guard let resolved = resolveChromiumTab(for: offender),
+              focusChromiumTab(app: resolved.app, window: resolved.tab.window, tab: resolved.tab.element) else {
+            fputs("Failed to select \(appName) tab; leaving tabs untouched.\n", stderr)
+            return false
+        }
         usleep(150_000)
-        return closeActiveChromiumTab(appName: appName, app: app, label: offender.detail)
+        return closeActiveChromiumTab(appName: appName, app: resolved.app, label: offender.detail)
     case .unresolvedBrowser:
         return false
     case let .app(process):
@@ -209,6 +278,30 @@ func closeOffender(_ offender: SoundOffender) -> Bool {
     case .blockedBrowser:
         openAccessibilitySettings()
         return false
+    }
+}
+
+func isClosableOffender(_ offender: SoundOffender) -> Bool {
+    switch offender.kind {
+    case .safariTab, .chromiumTab, .app:
+        return true
+    case .unresolvedBrowser, .blockedBrowser:
+        return false
+    }
+}
+
+func closeKey(for offender: SoundOffender) -> String {
+    switch offender.kind {
+    case let .safariTab(pid):
+        return "safari:\(pid)"
+    case let .chromiumTab(appName, bundleID, appPID, tabIndex, _, _):
+        return "chromium:\(appName):\(bundleID):\(appPID):\(tabIndex.map(String.init) ?? "-"):\(offender.detail)"
+    case let .unresolvedBrowser(appName, bundleID, appPID):
+        return "unresolved:\(appName):\(bundleID):\(appPID)"
+    case let .app(process):
+        return "app:\(process.pid)"
+    case let .blockedBrowser(appName, bundleID):
+        return "blocked:\(appName):\(bundleID)"
     }
 }
 
@@ -229,6 +322,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }()
     private var offenders: [SoundOffender] = []
     private var scanError: Error?
+    private var refreshGeneration = 0
+    private var isClosingAll = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
@@ -375,16 +470,38 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func refreshStatus() {
-        do {
-            offenders = try soundOffenders()
+        refreshGeneration += 1
+        let generation = refreshGeneration
+
+        statusLabel.stringValue = "Scanning sound sources..."
+        statusLabel.textColor = stfuYellow()
+        hintLabel.stringValue = ""
+        closeAllButton.isEnabled = !isClosingAll
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try soundOffenders() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.refreshGeneration == generation else {
+                    return
+                }
+                self.applyScanResult(result)
+            }
+        }
+    }
+
+    private func applyScanResult(_ result: Result<[SoundOffender], Error>) {
+        switch result {
+        case let .success(newOffenders):
+            offenders = newOffenders
             scanError = nil
-        } catch {
+        case let .failure(error):
             offenders = []
             scanError = error
         }
         tableView.reloadData()
         emptyLabel.isHidden = !offenders.isEmpty
         closeAllButton.isHidden = offenders.filter(isClosable).count < 2
+        closeAllButton.isEnabled = !isClosingAll
 
         if let scanError {
             statusLabel.stringValue = "Could not read audio sources."
@@ -428,12 +545,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func isClosable(_ offender: SoundOffender) -> Bool {
-        switch offender.kind {
-        case .safariTab, .chromiumTab, .app:
-            return true
-        case .unresolvedBrowser, .blockedBrowser:
-            return false
-        }
+        isClosableOffender(offender)
     }
 
     private func focusTitle(for offender: SoundOffender) -> String? {
@@ -615,9 +727,10 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         confirmCloseAll(targets) { confirmed in
             guard confirmed else { return }
             Task { @MainActor in
+                self.isClosingAll = true
                 self.closeAllButton.isEnabled = false
                 self.closeNextOffender(
-                    allowedKeys: Set(targets.map { self.closeKey(for: $0) }),
+                    allowedKeys: Set(targets.map { closeKey(for: $0) }),
                     attempted: []
                 )
             }
@@ -625,35 +738,27 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func closeNextOffender(allowedKeys: Set<String>, attempted: Set<String>) {
-        let current = ((try? soundOffenders()) ?? []).filter { offender in
-            isClosable(offender) && allowedKeys.contains(closeKey(for: offender))
-        }
-        guard let offender = current.first(where: { !attempted.contains(closeKey(for: $0)) }) else {
-            closeAllButton.isEnabled = true
-            refreshStatus()
-            return
-        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let current = ((try? soundOffenders()) ?? []).filter { offender in
+                isClosableOffender(offender) && allowedKeys.contains(closeKey(for: offender))
+            }
+            guard let offender = current.first(where: { !attempted.contains(closeKey(for: $0)) }) else {
+                DispatchQueue.main.async {
+                    self.isClosingAll = false
+                    self.closeAllButton.isEnabled = true
+                    self.refreshStatus()
+                }
+                return
+            }
 
-        var nextAttempted = attempted
-        nextAttempted.insert(closeKey(for: offender))
-        _ = closeOffender(offender)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.closeNextOffender(allowedKeys: allowedKeys, attempted: nextAttempted)
-        }
-    }
-
-    private func closeKey(for offender: SoundOffender) -> String {
-        switch offender.kind {
-        case let .safariTab(pid):
-            return "safari:\(pid)"
-        case let .chromiumTab(appName, app, window, tab):
-            return "chromium:\(appName):\(app.processIdentifier):\(CFHash(window)):\(CFHash(tab))"
-        case let .unresolvedBrowser(appName, app):
-            return "unresolved:\(appName):\(app.processIdentifier)"
-        case let .app(process):
-            return "app:\(process.pid)"
-        case let .blockedBrowser(appName):
-            return "blocked:\(appName)"
+            DispatchQueue.main.async {
+                var nextAttempted = attempted
+                nextAttempted.insert(closeKey(for: offender))
+                _ = closeOffender(offender)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.closeNextOffender(allowedKeys: allowedKeys, attempted: nextAttempted)
+                }
+            }
         }
     }
 

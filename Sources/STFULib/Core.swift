@@ -3,7 +3,7 @@ import ApplicationServices
 import CoreAudio
 import Foundation
 
-struct AudioProcess: Hashable {
+struct AudioProcess: Hashable, Sendable {
     let objectID: AudioObjectID
     let pid: pid_t
     let bundleID: String?
