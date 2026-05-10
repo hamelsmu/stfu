@@ -755,6 +755,12 @@ func waitUntilFrontmost(_ app: NSRunningApplication, timeout: TimeInterval = 1.0
 
 func activateAndConfirmFrontmost(_ app: NSRunningApplication, timeout: TimeInterval = 1.0) -> Bool {
     app.activate()
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    _ = AXUIElementSetAttributeValue(
+        appElement,
+        kAXFrontmostAttribute as CFString,
+        kCFBooleanTrue
+    )
     return waitUntilFrontmost(app, timeout: timeout)
 }
 
