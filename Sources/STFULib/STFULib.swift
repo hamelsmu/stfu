@@ -1277,15 +1277,43 @@ func runDoctor() {
 }
 
 func stfuYellow() -> NSColor {
-    NSColor(calibratedRed: 1.0, green: 0.84, blue: 0.12, alpha: 1)
+    NSColor(calibratedRed: 0.98, green: 0.78, blue: 0.18, alpha: 1)
 }
 
 func stfuRed() -> NSColor {
-    NSColor(calibratedRed: 1.0, green: 0.18, blue: 0.20, alpha: 1)
+    NSColor(calibratedRed: 0.95, green: 0.22, blue: 0.24, alpha: 1)
 }
 
 func stfuBlack() -> NSColor {
-    NSColor(calibratedWhite: 0.035, alpha: 1)
+    NSColor(calibratedRed: 0.055, green: 0.052, blue: 0.049, alpha: 1)
+}
+
+func stfuCanvas() -> NSColor {
+    NSColor(calibratedRed: 0.075, green: 0.072, blue: 0.068, alpha: 1)
+}
+
+func stfuPanel() -> NSColor {
+    NSColor(calibratedRed: 0.115, green: 0.108, blue: 0.102, alpha: 1)
+}
+
+func stfuRow() -> NSColor {
+    NSColor(calibratedRed: 0.145, green: 0.137, blue: 0.128, alpha: 1)
+}
+
+func stfuRowSelected() -> NSColor {
+    NSColor(calibratedRed: 0.28, green: 0.21, blue: 0.11, alpha: 1)
+}
+
+func stfuBorder() -> NSColor {
+    NSColor(calibratedWhite: 1, alpha: 0.10)
+}
+
+func stfuPrimaryText() -> NSColor {
+    NSColor(calibratedWhite: 0.92, alpha: 1)
+}
+
+func stfuSecondaryText() -> NSColor {
+    NSColor(calibratedWhite: 0.70, alpha: 1)
 }
 
 @MainActor
@@ -1344,6 +1372,28 @@ final class STFUPulpHeroView: NSView {
             height: textHeight * 1.25
         ))
     }
+}
+
+@MainActor
+final class STFUOffenderRowView: NSTableRowView {
+    override func drawBackground(in dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0, dy: 3)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        stfuRow().setFill()
+        path.fill()
+    }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0, dy: 3)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        stfuRowSelected().setFill()
+        path.fill()
+        stfuYellow().withAlphaComponent(0.45).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    override func drawSeparator(in dirtyRect: NSRect) {}
 }
 
 struct BrowserAppSnapshot: Hashable, Sendable {
@@ -1594,11 +1644,13 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     private let hintLabel = NSTextField(wrappingLabelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
+    private let listBackgroundView = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No active sound sources.")
     private lazy var closeAllButton: NSButton = {
         let button = NSButton(title: "STFU Everything", target: self, action: #selector(closeAll))
         button.bezelStyle = .rounded
         button.contentTintColor = stfuRed()
+        button.controlSize = .large
         button.translatesAutoresizingMaskIntoConstraints = false
         return button
     }()
@@ -1633,41 +1685,44 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "STFU"
-        window.minSize = NSSize(width: 850, height: 520)
+        window.minSize = NSSize(width: 840, height: 560)
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = stfuCanvas()
         window.center()
 
         let content = NSView()
         content.wantsLayer = true
-        content.layer?.backgroundColor = stfuBlack().cgColor
+        content.layer?.backgroundColor = stfuCanvas().cgColor
         window.contentView = content
 
         let heroView = STFUPulpHeroView()
         heroView.translatesAutoresizingMaskIntoConstraints = false
 
-        statusLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        statusLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        statusLabel.textColor = stfuPrimaryText()
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        hintLabel.font = .systemFont(ofSize: 13)
-        hintLabel.textColor = NSColor(calibratedWhite: 0.78, alpha: 1)
+        hintLabel.font = .systemFont(ofSize: 13, weight: .regular)
+        hintLabel.textColor = stfuSecondaryText()
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
         configureTable()
 
         emptyLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        emptyLabel.textColor = stfuYellow()
+        emptyLabel.textColor = stfuSecondaryText()
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshAction))
         refreshButton.bezelStyle = .rounded
-        refreshButton.contentTintColor = stfuYellow()
+        refreshButton.controlSize = .large
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
 
         let buttons = NSStackView(views: [refreshButton, closeAllButton])
@@ -1676,7 +1731,15 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         buttons.distribution = .gravityAreas
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [heroView, statusLabel, hintLabel, scrollView, emptyLabel, buttons] {
+        listBackgroundView.wantsLayer = true
+        listBackgroundView.layer?.backgroundColor = stfuPanel().cgColor
+        listBackgroundView.layer?.cornerRadius = 12
+        listBackgroundView.layer?.borderWidth = 1
+        listBackgroundView.layer?.borderColor = stfuBorder().cgColor
+        listBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+        listBackgroundView.addSubview(scrollView)
+
+        for view in [heroView, statusLabel, hintLabel, listBackgroundView, emptyLabel, buttons] {
             content.addSubview(view)
         }
 
@@ -1684,29 +1747,34 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             heroView.topAnchor.constraint(equalTo: content.topAnchor),
             heroView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             heroView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            heroView.heightAnchor.constraint(equalToConstant: 260),
+            heroView.heightAnchor.constraint(equalToConstant: 255),
 
-            statusLabel.topAnchor.constraint(equalTo: heroView.bottomAnchor, constant: 18),
-            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
-            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -26),
+            statusLabel.topAnchor.constraint(equalTo: heroView.bottomAnchor, constant: 20),
+            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
+            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
 
             hintLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 5),
             hintLabel.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
             hintLabel.trailingAnchor.constraint(equalTo: statusLabel.trailingAnchor),
 
-            scrollView.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 16),
-            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
-            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -26),
-            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -18),
+            listBackgroundView.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 18),
+            listBackgroundView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
+            listBackgroundView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
+            listBackgroundView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -18),
 
-            emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
-            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 20),
-            emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -20),
+            scrollView.topAnchor.constraint(equalTo: listBackgroundView.topAnchor, constant: 8),
+            scrollView.leadingAnchor.constraint(equalTo: listBackgroundView.leadingAnchor, constant: 8),
+            scrollView.trailingAnchor.constraint(equalTo: listBackgroundView.trailingAnchor, constant: -8),
+            scrollView.bottomAnchor.constraint(equalTo: listBackgroundView.bottomAnchor, constant: -8),
 
-            buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 26),
-            buttons.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -26),
-            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
+            emptyLabel.centerXAnchor.constraint(equalTo: listBackgroundView.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: listBackgroundView.centerYAnchor),
+            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: listBackgroundView.leadingAnchor, constant: 20),
+            emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: listBackgroundView.trailingAnchor, constant: -20),
+
+            buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
+            buttons.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -30),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -22)
         ])
 
         self.window = window
@@ -1717,24 +1785,25 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         tableView.delegate = self
         tableView.dataSource = self
         tableView.headerView = nil
-        tableView.rowHeight = 58
-        tableView.intercellSpacing = NSSize(width: 0, height: 4)
+        tableView.rowHeight = 62
+        tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.target = self
         tableView.doubleAction = #selector(focusSelected)
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.allowsEmptySelection = true
         tableView.selectionHighlightStyle = .regular
-        tableView.backgroundColor = NSColor(calibratedWhite: 0.055, alpha: 1)
-        tableView.gridColor = NSColor(calibratedWhite: 0.18, alpha: 1)
+        tableView.backgroundColor = .clear
+        tableView.gridStyleMask = []
+        tableView.style = .plain
 
         let offenderColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("offender"))
         offenderColumn.title = "Source"
-        offenderColumn.width = 190
+        offenderColumn.width = 210
         tableView.addTableColumn(offenderColumn)
 
         let detailColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("detail"))
         detailColumn.title = "Detected audio"
-        detailColumn.width = 340
+        detailColumn.width = 370
         tableView.addTableColumn(detailColumn)
 
         let actionColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("action"))
@@ -1744,9 +1813,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = tableView.backgroundColor
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
     }
 
@@ -1754,7 +1822,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         scanGeneration += 1
         let generation = scanGeneration
         statusLabel.stringValue = offenders.isEmpty ? "Scanning sound sources..." : "Refreshing sound sources..."
-        statusLabel.textColor = stfuYellow()
+        statusLabel.textColor = stfuPrimaryText()
         hintLabel.stringValue = ""
 
         Task.detached(priority: .userInitiated) {
@@ -1792,13 +1860,15 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         if let scanError {
             statusLabel.stringValue = "Could not read audio sources."
             statusLabel.textColor = stfuRed()
+            hintLabel.textColor = stfuSecondaryText()
             hintLabel.stringValue = "\(scanError)"
             return
         }
 
         if offenders.isEmpty {
             statusLabel.stringValue = "No active sound sources."
-            statusLabel.textColor = .systemGreen
+            statusLabel.textColor = stfuPrimaryText()
+            hintLabel.textColor = stfuSecondaryText()
             hintLabel.stringValue = ""
             return
         }
@@ -1817,7 +1887,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         }
 
         statusLabel.stringValue = "\(offenders.count) sound source\(offenders.count == 1 ? "" : "s")"
-        statusLabel.textColor = stfuRed()
+        statusLabel.textColor = stfuPrimaryText()
+        hintLabel.textColor = stfuSecondaryText()
         if needsAccessibility {
             hintLabel.stringValue = "Enable STFU in Accessibility settings, then refresh. If it already looks enabled, toggle it off and on once."
         } else if needsAutomation {
@@ -1869,10 +1940,14 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         }
     }
 
-    private func rowButton(title: String, color: NSColor, row: Int, action: Selector) -> NSButton {
+    private func rowButton(title: String, color: NSColor?, row: Int, action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
         button.bezelStyle = .rounded
-        button.contentTintColor = color
+        button.controlSize = .regular
+        if let color {
+            button.contentTintColor = color
+        }
+        button.font = .systemFont(ofSize: 13, weight: .medium)
         button.tag = row
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -1896,13 +1971,13 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             stack.orientation = .horizontal
             stack.alignment = .centerY
             stack.spacing = 8
-            stack.distribution = .fillEqually
+            stack.distribution = .fill
             stack.translatesAutoresizingMaskIntoConstraints = false
 
             if let title = focusTitle(for: offender) {
                 stack.addArrangedSubview(rowButton(
                     title: title,
-                    color: stfuYellow(),
+                    color: nil,
                     row: row,
                     action: #selector(focusRowButton(_:))
                 ))
@@ -1920,9 +1995,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             container.addSubview(stack)
             NSLayoutConstraint.activate([
                 stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-                stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 10),
-                stack.widthAnchor.constraint(lessThanOrEqualToConstant: 320)
+                stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+                stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 12)
             ])
             return container
         }
@@ -1937,7 +2011,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         } else {
             text = offender.detail
             font = .systemFont(ofSize: 13, weight: .regular)
-            color = NSColor(calibratedWhite: 0.82, alpha: 1)
+            color = stfuSecondaryText()
         }
 
         let container = NSView()
@@ -1952,11 +2026,15 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
         container.addSubview(field)
         NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-            field.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -10),
+            field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            field.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -14),
             field.centerYAnchor.constraint(equalTo: container.centerYAnchor)
         ])
         return container
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        STFUOffenderRowView()
     }
 
     private func selectedOffender() -> SoundOffender? {
