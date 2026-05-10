@@ -156,7 +156,3 @@ DMG_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARY_PROFILE="notarytool-keychain-profile" \
 scripts/package.sh
 ```
-
-## License and Artwork
-
-Source code is MIT licensed. The bundled prototype artwork is user-provided for this private project; replace it with artwork you have rights to distribute before making a public release.
