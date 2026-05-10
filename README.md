@@ -10,7 +10,7 @@ Have you ever had a stray video, song, or mystery browser tab playing from your 
 - Normal app making noise: quit that app.
 - Multiple sound sources: close them one at a time or use `STFU Everything`.
 
-![STFU app showing multiple sound sources](assets/screenshots/app-multiple-sources.png)
+<img width="1944" height="1528" alt="image" src="https://github.com/user-attachments/assets/582d5675-040e-4481-a02e-e86ed530a11e" />
 
 ## Install
 
