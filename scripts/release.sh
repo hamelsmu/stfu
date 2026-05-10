@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-${VERSION:-0.1.0}}"
+VERSION="${1:-${VERSION:-0.1.1}}"
 TAG="v$VERSION"
 REPO="${REPO:-hamelsmu/stfu}"
 DMG_PATH="$ROOT/dist/STFU-$VERSION.dmg"
@@ -62,17 +62,20 @@ Find the Mac app or browser tab making sound. Close that tab, quit that app, or 
 
 ![STFU app screenshot](https://github.com/$REPO/raw/$TAG/assets/screenshots/app-multiple-sources.png)
 
+Requires macOS 14 or later.
+
 Download:
 - \`STFU-$VERSION.dmg\` for the macOS installer disk image.
+- \`STFU-$VERSION.pkg\` for the direct installer.
 
 Install:
-1. Open the DMG and run \`Install STFU.pkg\`.
+1. Open the DMG and run \`Install STFU.pkg\`, or open the PKG directly.
 2. Open STFU.
-3. If a browser row asks for Accessibility, click \`Open Settings\`, enable STFU, then refresh. macOS may also ask for browser Automation permission.
+3. If a browser row asks for Accessibility, click \`Open Settings\`, enable STFU, then refresh.
+4. If macOS asks for browser Automation permission while STFU scans or controls a browser tab, allow it. If you denied it, go to System Settings > Privacy & Security > Automation, open STFU, enable the affected browser under it, then refresh STFU.
 
 Signing status:
 - This build is unsigned/ad-hoc signed, so Gatekeeper may require Control-click > Open.
-- For broad distribution, rebuild with Developer ID signing and notarization.
 
 Checksums:
 - \`STFU-$VERSION.dmg\`: \`$DMG_SHA\`

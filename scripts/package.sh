@@ -3,7 +3,7 @@ set -euo pipefail
 export COPYFILE_DISABLE=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 IDENTIFIER="${IDENTIFIER:-dev.hamel.stfu}"
 APP_NAME="STFU"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-$IDENTIFIER}"
@@ -14,6 +14,7 @@ PAYLOAD_DIR="$WORK_DIR/payload"
 SCRIPTS_DIR="$WORK_DIR/scripts"
 DMG_ROOT="$WORK_DIR/dmg-root"
 ICON_PATH="$WORK_DIR/STFU.icns"
+ENTITLEMENTS_PATH="${ENTITLEMENTS_PATH:-$ROOT/packaging/STFU.entitlements}"
 DEFAULT_ARTWORK_PATH="$ROOT/assets/pulpfiction_new.webp"
 ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
 APP_BUNDLE="$PAYLOAD_DIR/Applications/$APP_NAME.app"
@@ -21,6 +22,14 @@ PKG_PATH="$DIST_DIR/STFU-$VERSION.pkg"
 RAW_PKG_PATH="$WORK_DIR/STFU-$VERSION.raw.pkg"
 UNSIGNED_PKG_PATH="$WORK_DIR/STFU-$VERSION.unsigned.pkg"
 DMG_PATH="$DIST_DIR/STFU-$VERSION.dmg"
+APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
+
+if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+  if [[ "$APP_SIGN_IDENTITY" == "-" || -z "${SIGN_IDENTITY:-}" || -z "${DMG_SIGN_IDENTITY:-}" ]]; then
+    echo "NOTARY_PROFILE requires APP_SIGN_IDENTITY, SIGN_IDENTITY, and DMG_SIGN_IDENTITY." >&2
+    exit 1
+  fi
+fi
 
 rm -rf "$WORK_DIR"
 mkdir -p \
@@ -92,8 +101,11 @@ chmod 755 "$SCRIPTS_DIR/postinstall"
 find "$PAYLOAD_DIR" -name '._*' -delete
 xattr -cr "$PAYLOAD_DIR" || true
 
-APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
-codesign --force --deep --sign "$APP_SIGN_IDENTITY" "$APP_BUNDLE"
+CODESIGN_ARGS=(--force --deep --sign "$APP_SIGN_IDENTITY")
+if [[ "$APP_SIGN_IDENTITY" != "-" ]]; then
+  CODESIGN_ARGS+=(--options runtime --timestamp --entitlements "$ENTITLEMENTS_PATH")
+fi
+codesign "${CODESIGN_ARGS[@]}" "$APP_BUNDLE"
 
 find "$PAYLOAD_DIR" -name '._*' -delete
 xattr -cr "$PAYLOAD_DIR" || true
@@ -141,12 +153,19 @@ if pkgutil --payload-files "$PKG_PATH" | grep --color=never -E '(^|/)\._[^/]*$';
   exit 1
 fi
 
+if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+  xcrun notarytool submit "$PKG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$PKG_PATH"
+fi
+
 cp "$PKG_PATH" "$DMG_ROOT/Install STFU.pkg"
 cp "$ICON_PATH" "$DMG_ROOT/.VolumeIcon.icns"
 cat > "$DMG_ROOT/README.txt" <<README
 STFU
 
-Find the app or browser tab making noise and make it STFU.
+Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
+
+Requires macOS 14 or later.
 
 1. Open "Install STFU.pkg".
 2. Open STFU.
@@ -155,7 +174,8 @@ Find the app or browser tab making noise and make it STFU.
 
 Unsigned build: if macOS blocks the installer, Control-click it and choose Open.
 Accessibility lets STFU see browser tabs so it can close the noisy tab instead of the whole browser.
-macOS may also ask for Automation permission when STFU controls a browser.
+macOS may ask for Automation permission while STFU scans or controls a browser tab. Allow it.
+If you denied Automation, go to System Settings > Privacy & Security > Automation, open STFU, enable the affected browser under it, then refresh STFU.
 
 To check setup from Terminal, run:
   stfu --doctor

@@ -11,6 +11,6 @@
 
 ## Build and Release
 
-- Use `just build`, `just package`, and `just verify` for local checks. `scripts/verify.sh` rebuilds artifacts by default; pass `VERIFY_EXISTING=1` only after a fresh package step.
+- Use `just build`, `just package`, `just verify`, and `just verify-existing` for local checks. `scripts/verify.sh` rebuilds artifacts by default; use `just verify-existing` only after a fresh package step.
 - Use `VERSION=x.y.z just release` as the local GitHub Release path. The GitHub Actions workflow builds and uploads CI artifacts only; it does not mutate releases.
 - Do not replace an existing tag unless the user explicitly wants that release replaced; then use `FORCE=1 VERSION=x.y.z just release`.

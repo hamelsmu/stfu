@@ -1,6 +1,6 @@
 set dotenv-load := true
 
-version := env_var_or_default("VERSION", "0.1.0")
+version := env_var_or_default("VERSION", "0.1.1")
 
 default:
     just --list
@@ -11,7 +11,10 @@ build:
 package:
     VERSION={{version}} scripts/package.sh
 
-verify: package
+verify:
+    VERSION={{version}} scripts/verify.sh
+
+verify-existing:
     VERIFY_EXISTING=1 VERSION={{version}} scripts/verify.sh
 
 install-local: package

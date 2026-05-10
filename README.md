@@ -1,18 +1,18 @@
 # STFU
 
-<img src="assets/stfu-icon.png" alt="STFU" width="180">
-
 Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
 
-Have you ever had a stray video, song, or mystery browser tab playing from your computer and you can't find where? This app helps you find the culprit and make it STFU.
+![STFU showing multiple sound sources](assets/screenshots/app-multiple-sources.png)
+
+For the stray video, song, or mystery tab you can hear but cannot find.
 
 - Browser tab making noise: close only that tab.
-- Normal app making noise: quit that app.
+- Mac app making noise: quit that app, with confirmation.
 - Multiple sound sources: close them one at a time or use `STFU Everything`.
 
-<img width="1944" height="1528" alt="image" src="https://github.com/user-attachments/assets/582d5675-040e-4481-a02e-e86ed530a11e" />
-
 ## Install
+
+Requires macOS 14 or later.
 
 Download the latest `STFU-*.dmg` from [GitHub Releases](https://github.com/hamelsmu/stfu/releases/latest), open it, and run `Install STFU.pkg`.
 
@@ -40,9 +40,13 @@ Open `STFU.app`. If a browser row says it needs Accessibility, click `Open Setti
 
 macOS requires that permission so STFU can inspect browser tab strips and close only the noisy tab.
 
-If STFU already appears enabled but Chrome still asks, toggle STFU off and on once. That can happen after replacing a local unsigned build.
+If STFU does not appear in the list, click `Open Settings` from the STFU row again. If STFU already appears enabled but Chrome still asks, toggle STFU off and on once. That can happen after replacing a local unsigned build.
 
-macOS may also ask whether STFU can control Safari, Chrome, or another browser. Allow it; that Automation permission is how STFU focuses or closes the offending tab.
+macOS may also ask whether STFU can control Safari, Chrome, or another browser. Allow it; that Automation permission lets STFU identify Safari tabs while scanning and focus or close browser tabs. If you denied Automation, re-enable STFU in:
+
+`System Settings > Privacy & Security > Automation`
+
+Open STFU in that Automation list, enable the affected browser under it, then reopen STFU and click `Refresh`.
 
 You can check the local setup from Terminal:
 
@@ -59,7 +63,7 @@ In the app:
 - `Close Tab`: close only the noisy browser tab.
 - `Quit App`: asks before quitting the noisy app. Unsaved work in that app could be lost.
 - `STFU Everything`: asks before closing all noisy tabs and quitting noisy apps.
-- `Open Settings`: grant Accessibility when a browser needs it.
+- `Open Settings`: open the relevant Accessibility or Automation permission page.
 - `Refresh`: rescan current audio sources.
 
 From Terminal:
@@ -111,16 +115,10 @@ Artifacts are written to:
 - `dist/STFU-$VERSION.pkg`
 - `dist/STFU-$VERSION.dmg`
 
-To use custom app artwork:
-
-```sh
-ARTWORK_PATH=/path/to/image.webp scripts/package.sh
-```
-
 Verify local artifacts:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 hdiutil verify "dist/STFU-$VERSION.dmg"
 pkgutil --payload-files "dist/STFU-$VERSION.pkg"
 ```
@@ -130,13 +128,13 @@ pkgutil --payload-files "dist/STFU-$VERSION.pkg"
 The local release script is the authoritative path for publishing a GitHub Release. It builds, verifies, tags, pushes, and uploads the DMG/pkg with release notes:
 
 ```sh
-VERSION=0.1.0 just release
+VERSION=0.1.1 just release
 ```
 
-If a tag already exists and you intentionally want to replace it:
+Use a version that has not been published yet. If a tag already exists and you intentionally want to replace a draft/test release:
 
 ```sh
-FORCE=1 VERSION=0.1.0 just release
+FORCE=1 VERSION=x.y.z just release
 ```
 
 The GitHub Actions workflow also builds and verifies the package on macOS for pushed tags and manual runs. It uploads CI artifacts to the workflow run; it does not mutate the GitHub Release.
@@ -156,3 +154,5 @@ DMG_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARY_PROFILE="notarytool-keychain-profile" \
 scripts/package.sh
 ```
+
+Developer ID app builds are signed with hardened runtime and the Apple Events entitlement STFU needs for browser control.

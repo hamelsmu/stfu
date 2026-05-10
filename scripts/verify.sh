@@ -2,13 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 DMG_PATH="$ROOT/dist/STFU-$VERSION.dmg"
 PKG_PATH="$ROOT/dist/STFU-$VERSION.pkg"
 
+echo "Running Swift tests..."
+swift test --package-path "$ROOT"
+
 if [[ "${VERIFY_EXISTING:-0}" == "1" ]]; then
+  echo "Verifying existing artifacts for VERSION=$VERSION..."
   swift build --package-path "$ROOT" -c release
 else
+  echo "Building package artifacts for VERSION=$VERSION..."
   VERSION="$VERSION" "$ROOT/scripts/package.sh"
 fi
 
@@ -27,9 +32,11 @@ fi
 shasum -a 256 "$DMG_PATH" "$PKG_PATH"
 
 if [[ "${STRICT_SIGNING:-0}" == "1" ]]; then
+  echo "Running strict Gatekeeper checks..."
   spctl -a -vv -t open "$DMG_PATH"
   spctl -a -vv -t install "$PKG_PATH"
 else
-  spctl -a -vv -t open "$DMG_PATH" || true
-  spctl -a -vv -t install "$PKG_PATH" || true
+  echo "Running advisory Gatekeeper checks. Set STRICT_SIGNING=1 to fail on rejection."
+  spctl -a -vv -t open "$DMG_PATH" || echo "Advisory: DMG is not accepted by Gatekeeper in this local build."
+  spctl -a -vv -t install "$PKG_PATH" || echo "Advisory: PKG is not accepted by Gatekeeper in this local build."
 fi

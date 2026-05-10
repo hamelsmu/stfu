@@ -37,7 +37,7 @@ Expected:
 For deterministic Chrome tests, serve the included audio fixture:
 
 ```sh
-cd /Users/hamel/git/stfu
+cd path/to/stfu
 python3 -m http.server 9876
 ```
 
@@ -191,9 +191,9 @@ Inspect the app at these window sizes:
 
 Check:
 
-- Header uses the configured artwork as the main visual and keeps the subject visible.
-- STFU icon uses only the artwork plus large white `STFU` text, is recognizable at Dock/Finder sizes, and is not blurry.
-- Black/white artwork treatment remains readable in both Dark Mode and Light Mode.
+- Header uses the configured image as the main visual and keeps the subject visible.
+- STFU icon uses only the image plus large white `STFU` text, is recognizable at Dock/Finder sizes, and is not blurry.
+- Black/white image treatment remains readable in both Dark Mode and Light Mode.
 - Status text is funny but still clear.
 - Error/permission states explain what to do next.
 - Chrome row displays tab number and title without awkward truncation.
@@ -212,8 +212,8 @@ Clean first run from the DMG:
 - Launch `/Applications/STFU.app` before granting permissions.
 - Start one browser fixture and one app audio source.
 - Browser rows should explain the missing permission and offer `Open Settings`; app rows should still be visible.
-- Grant Accessibility, refresh, then allow any macOS Automation prompt when using `Go to Tab` or `Close Tab`.
-- If Automation is denied for Safari, STFU should show Safari as a browser permission/unresolved row and must not offer `Quit App`.
+- Grant Accessibility, refresh, then allow any macOS Automation prompt while STFU scans or when using `Go to Tab` / `Close Tab`.
+- If Automation is denied for Safari, STFU should show a Safari Automation permission row with `Open Settings` and must not offer `Quit App`.
 
 Run with Accessibility disabled for STFU:
 
@@ -233,7 +233,7 @@ Run after granting Accessibility:
 Before release:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 VERSION="$VERSION" scripts/verify.sh
 ```
 

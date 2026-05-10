@@ -7,16 +7,25 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "STFULib", targets: ["STFULib"]),
         .executable(name: "stfu", targets: ["stfu"])
     ],
     targets: [
-        .executableTarget(
-            name: "stfu",
+        .target(
+            name: "STFULib",
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("AppKit")
             ]
+        ),
+        .executableTarget(
+            name: "stfu",
+            dependencies: ["STFULib"]
+        ),
+        .testTarget(
+            name: "STFULibTests",
+            dependencies: ["STFULib"]
         )
     ]
 )
