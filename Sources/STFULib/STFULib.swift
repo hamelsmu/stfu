@@ -612,7 +612,6 @@ func isAudibleIndicatorText(_ text: String) -> Bool {
         || lower.contains("playing sound")
         || lower.contains("mute tab")
         || lower.contains("mute site")
-        || lower.contains("speaker")
 }
 
 func isTabLikeAXElement(_ element: AXUIElement) -> Bool {

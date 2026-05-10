@@ -44,6 +44,7 @@ final class STFULibTests: XCTestCase {
         XCTAssertTrue(isAudibleIndicatorText("Mute tab"))
         XCTAssertFalse(isAudibleIndicatorText("Unmute tab"))
         XCTAssertFalse(isAudibleIndicatorText("Muted"))
+        XCTAssertFalse(isAudibleIndicatorText("The keynote speaker starts in 30 minutes"))
     }
 
     func testBundleFilterMatchesBrowserHelpers() {
