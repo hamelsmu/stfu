@@ -56,7 +56,7 @@ struct Options {
     var bundleID: String?
 }
 
-func parseOptions(_ args: [String]) -> Options? {
+func parseOptions(_ args: [String], emitErrors: Bool = true) -> Options? {
     var options = Options()
     var index = 0
     while index < args.count {
@@ -71,7 +71,9 @@ func parseOptions(_ args: [String]) -> Options? {
         case "--bundle-id":
             index += 1
             guard index < args.count else {
-                fputs("--bundle-id requires a value\n\n\(usage)\n", stderr)
+                if emitErrors {
+                    fputs("--bundle-id requires a value\n\n\(usage)\n", stderr)
+                }
                 return nil
             }
             options.bundleID = args[index]
@@ -85,7 +87,9 @@ func parseOptions(_ args: [String]) -> Options? {
             print(usage)
             exit(0)
         default:
-            fputs("Unknown argument: \(arg)\n\n\(usage)\n", stderr)
+            if emitErrors {
+                fputs("Unknown argument: \(arg)\n\n\(usage)\n", stderr)
+            }
             return nil
         }
         index += 1

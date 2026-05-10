@@ -21,6 +21,10 @@ let package = Package(
         .executableTarget(
             name: "stfu",
             dependencies: ["STFULib"]
+        ),
+        .testTarget(
+            name: "STFULibTests",
+            dependencies: ["STFULib"]
         )
     ]
 )
