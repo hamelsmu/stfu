@@ -1052,7 +1052,7 @@ func soundOffenders() -> [SoundOffender] {
 
         offenders.append(SoundOffender(
             name: process.name,
-            detail: "\(process.bundleID ?? "pid \(process.pid)")",
+            detail: "App audio source",
             kind: .app(process)
         ))
     }

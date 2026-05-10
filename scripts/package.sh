@@ -150,10 +150,15 @@ cp "$ICON_PATH" "$DMG_ROOT/.VolumeIcon.icns"
 cat > "$DMG_ROOT/README.txt" <<README
 STFU
 
+Find the app or browser tab making noise and make it STFU.
+
 1. Open "Install STFU.pkg".
 2. Open STFU.
 3. If a Chrome row says it needs Accessibility, click "Open Settings".
 4. In System Settings > Privacy & Security > Accessibility, turn on STFU.
+
+Unsigned build: if macOS blocks the installer, Control-click it and choose Open.
+Accessibility lets STFU see browser tabs so it can close the noisy tab instead of the whole browser.
 
 The installer adds:
 - /Applications/STFU.app
