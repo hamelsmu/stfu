@@ -35,6 +35,8 @@ final class STFULibTests: XCTestCase {
             "Example Video"
         )
         XCTAssertEqual(tabTitle(from: "Example Video - Mute tab | AXButton"), "Example Video")
+        XCTAssertEqual(tabTitle(from: "Example Video - playing audio | AXButton"), "Example Video")
+        XCTAssertEqual(tabTitle(from: "Example Video - MUTE SITE | AXButton"), "Example Video")
     }
 
     func testAudibleIndicatorTextMatchesPlayingButNotMuted() {
@@ -89,6 +91,60 @@ final class STFULibTests: XCTestCase {
         XCTAssertEqual(
             offenderCloseKey(for: offender),
             "chromium:com.google.Chrome:42:2:Example Video"
+        )
+    }
+
+    func testChromiumTabSelectionReturnsOneExactMatch() {
+        let snapshot = chromeSnapshot(tabIndex: 2, title: "Target Video", label: "Target Video - Audio playing")
+        let selected = selectChromiumTabCandidate(for: snapshot, from: [
+            ChromiumTabCandidate(index: 1, title: "Other Video", label: "Other Video - Audio playing"),
+            ChromiumTabCandidate(index: 2, title: "Target Video", label: "Target Video - Audio playing")
+        ])
+
+        XCTAssertEqual(selected?.index, 2)
+        XCTAssertEqual(selected?.title, "Target Video")
+    }
+
+    func testChromiumTabSelectionRejectsWrongKnownIndex() {
+        let snapshot = chromeSnapshot(tabIndex: 2, title: "Target Video", label: "Target Video - Audio playing")
+        let selected = selectChromiumTabCandidate(for: snapshot, from: [
+            ChromiumTabCandidate(index: 3, title: "Target Video", label: "Target Video - Audio playing")
+        ])
+
+        XCTAssertNil(selected)
+    }
+
+    func testChromiumTabSelectionRejectsAmbiguousMatches() {
+        let snapshot = chromeSnapshot(tabIndex: nil, title: "Target Video", label: "Target Video - Audio playing")
+        let selected = selectChromiumTabCandidate(for: snapshot, from: [
+            ChromiumTabCandidate(index: 1, title: "Target Video", label: "Target Video - Audio playing"),
+            ChromiumTabCandidate(index: 2, title: "Target Video", label: "Target Video - Audio playing")
+        ])
+
+        XCTAssertNil(selected)
+    }
+
+    func testChromiumTabSelectionRejectsSingleNonMatchingAudibleTab() {
+        let snapshot = chromeSnapshot(tabIndex: 2, title: "Original Video", label: "Original Video - Audio playing")
+        let selected = selectChromiumTabCandidate(for: snapshot, from: [
+            ChromiumTabCandidate(index: 1, title: "Different Video", label: "Different Video - Audio playing")
+        ])
+
+        XCTAssertNil(selected)
+    }
+
+    private func chromeSnapshot(
+        tabIndex: Int?,
+        title: String,
+        label: String
+    ) -> ChromiumTabSnapshot {
+        ChromiumTabSnapshot(
+            appName: "Google Chrome",
+            bundleID: "com.google.Chrome",
+            appPID: 42,
+            tabIndex: tabIndex,
+            title: title,
+            label: label
         )
     }
 }

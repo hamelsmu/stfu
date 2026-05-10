@@ -618,6 +618,20 @@ struct AXAudibleTab {
     let label: String
     let title: String
     let index: Int?
+
+    var candidate: ChromiumTabCandidate {
+        ChromiumTabCandidate(index: index, title: title, label: label)
+    }
+}
+
+struct ChromiumTabCandidate: Hashable, Sendable {
+    let index: Int?
+    let title: String
+    let label: String
+
+    var detail: String {
+        title.isEmpty ? label : title
+    }
 }
 
 func findAudibleTab(in root: AXUIElement, verbose: Bool) -> AXAudibleTab? {
@@ -817,22 +831,29 @@ func runningChromiumApplication(_ snapshot: ChromiumTabSnapshot) -> NSRunningApp
     return runningApplication(bundleID: snapshot.bundleID)
 }
 
-func chromiumTabDetail(_ tab: AXAudibleTab) -> String {
-    tab.title.isEmpty ? tab.label : tab.title
-}
-
-func chromiumTabMatches(_ snapshot: ChromiumTabSnapshot, _ tab: AXAudibleTab) -> Bool {
+func chromiumTabMatches(_ snapshot: ChromiumTabSnapshot, _ candidate: ChromiumTabCandidate) -> Bool {
     if let expectedIndex = snapshot.tabIndex,
-       let candidateIndex = tab.index,
+       let candidateIndex = candidate.index,
        expectedIndex != candidateIndex {
         return false
     }
 
     let expectedDetail = snapshot.title.isEmpty ? snapshot.label : snapshot.title
-    let candidateDetail = chromiumTabDetail(tab)
-    return candidateDetail == expectedDetail
-        || tab.label == snapshot.label
-        || (!snapshot.title.isEmpty && tab.title == snapshot.title)
+    return candidate.detail == expectedDetail
+        || candidate.label == snapshot.label
+        || (!snapshot.title.isEmpty && candidate.title == snapshot.title)
+}
+
+func chromiumTabMatches(_ snapshot: ChromiumTabSnapshot, _ tab: AXAudibleTab) -> Bool {
+    chromiumTabMatches(snapshot, tab.candidate)
+}
+
+func selectChromiumTabCandidate(
+    for snapshot: ChromiumTabSnapshot,
+    from candidates: [ChromiumTabCandidate]
+) -> ChromiumTabCandidate? {
+    let matches = candidates.filter { chromiumTabMatches(snapshot, $0) }
+    return matches.count == 1 ? matches[0] : nil
 }
 
 func resolveChromiumTab(
@@ -847,12 +868,14 @@ func resolveChromiumTab(
     }
 
     let tabs = audibleChromiumTabs(app: app, verbose: verbose)
-    let matches = tabs.filter { chromiumTabMatches(snapshot, $0) }
-    if matches.count == 1 {
-        return (app, matches[0])
+    let candidates = tabs.map(\.candidate)
+    if let candidate = selectChromiumTabCandidate(for: snapshot, from: candidates),
+       let tab = tabs.first(where: { $0.candidate == candidate }) {
+        return (app, tab)
     }
 
     if verbose {
+        let matches = candidates.filter { chromiumTabMatches(snapshot, $0) }
         print("Could not resolve \(snapshot.appName) tab unambiguously; matches=\(matches.count), audibleTabs=\(tabs.count).")
     }
     return nil
