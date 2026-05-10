@@ -18,14 +18,11 @@ struct CommandResult {
 
 enum STFUError: Error, CustomStringConvertible {
     case audioStatus(OSStatus, String)
-    case commandFailed(String)
 
     var description: String {
         switch self {
         case let .audioStatus(status, context):
             return "\(context): CoreAudio returned \(status)"
-        case let .commandFailed(message):
-            return message
         }
     }
 }
@@ -402,6 +399,29 @@ func runningChromiumApplication(for process: AudioProcess, bundleID: String) -> 
         return app
     }
     return runningApplication(bundleID: bundleID)
+}
+
+func isSafariRelated(_ process: AudioProcess) -> Bool {
+    if process.bundleID == "com.apple.Safari"
+        || process.bundleID?.hasPrefix("com.apple.Safari.") == true
+        || process.bundleID?.hasPrefix("com.apple.WebKit.") == true {
+        return true
+    }
+
+    var pid = process.pid
+    for _ in 0..<12 {
+        if let app = NSRunningApplication(processIdentifier: pid),
+           app.bundleIdentifier == "com.apple.Safari" {
+            return true
+        }
+
+        guard let parent = parentPID(of: pid), parent > 1, parent != pid else {
+            break
+        }
+        pid = parent
+    }
+
+    return false
 }
 
 func accessibilityTrusted(prompt: Bool = false) -> Bool {
@@ -825,10 +845,12 @@ func closeApplication(_ process: AudioProcess, dryRun: Bool) -> Bool {
 }
 
 func handleProcess(_ process: AudioProcess, options: Options) -> Bool {
-    if runningApplication(bundleID: "com.apple.Safari") != nil {
+    if runningApplication(bundleID: "com.apple.Safari") != nil, isSafariRelated(process) {
         if closeSafariTab(pid: process.pid, dryRun: options.dryRun) {
             return true
         }
+        fputs("Could not identify an audible Safari tab; leaving Safari untouched.\n", stderr)
+        return false
     }
 
     for app in chromiumApps where runningApplication(bundleID: app.bundleID) != nil {
@@ -1012,7 +1034,6 @@ enum OffenderKind {
 }
 
 final class SoundOffender {
-    let id = UUID()
     let name: String
     let detail: String
     let kind: OffenderKind
@@ -1024,19 +1045,26 @@ final class SoundOffender {
     }
 }
 
-func soundOffenders() -> [SoundOffender] {
-    let processes = (try? outputAudioProcesses()) ?? []
+func soundOffenders() throws -> [SoundOffender] {
+    let processes = try outputAudioProcesses()
     var offenders: [SoundOffender] = []
     var handledBrowserApps = Set<pid_t>()
 
     for process in processes {
-        if runningApplication(bundleID: "com.apple.Safari") != nil,
-           let safari = safariTabInfo(pid: process.pid) {
-            offenders.append(SoundOffender(
-                name: "Safari tab",
-                detail: "\(safari.title)\(safari.url.isEmpty ? "" : " - \(safari.url)")",
-                kind: .safariTab(process.pid)
-            ))
+        if let safariApp = runningApplication(bundleID: "com.apple.Safari"), isSafariRelated(process) {
+            if let safari = safariTabInfo(pid: process.pid) {
+                offenders.append(SoundOffender(
+                    name: "Safari tab",
+                    detail: "\(safari.title)\(safari.url.isEmpty ? "" : " - \(safari.url)")",
+                    kind: .safariTab(process.pid)
+                ))
+            } else {
+                offenders.append(SoundOffender(
+                    name: "Safari",
+                    detail: "Needs browser Automation permission to identify the noisy tab.",
+                    kind: .unresolvedBrowser(appName: "Safari", app: safariApp)
+                ))
+            }
             continue
         }
 
@@ -1076,7 +1104,7 @@ func soundOffenders() -> [SoundOffender] {
             } else {
                 offenders.append(SoundOffender(
                     name: chromium.name,
-                    detail: "Needs Accessibility for this STFU build.",
+                    detail: "Needs Accessibility to identify noisy browser tabs.",
                     kind: .blockedBrowser(appName: chromium.name)
                 ))
             }
@@ -1153,11 +1181,18 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         return button
     }()
     private var offenders: [SoundOffender] = []
+    private var scanError: Error?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        start()
+    }
+
+    func start() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
-        buildWindow()
+        if window == nil {
+            buildWindow()
+        }
         refreshStatus()
     }
 
@@ -1166,7 +1201,10 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard window != nil else { return }
+        guard window != nil else {
+            start()
+            return
+        }
         refreshStatus()
     }
 
@@ -1178,7 +1216,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             defer: false
         )
         window.title = "STFU"
-        window.minSize = NSSize(width: 780, height: 520)
+        window.minSize = NSSize(width: 850, height: 520)
         window.center()
 
         let content = NSView()
@@ -1290,10 +1328,23 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func refreshStatus() {
-        offenders = soundOffenders()
+        do {
+            offenders = try soundOffenders()
+            scanError = nil
+        } catch {
+            offenders = []
+            scanError = error
+        }
         tableView.reloadData()
         emptyLabel.isHidden = !offenders.isEmpty
         closeAllButton.isHidden = offenders.filter(isClosable).count < 2
+
+        if let scanError {
+            statusLabel.stringValue = "Could not read audio sources."
+            statusLabel.textColor = stfuRed()
+            hintLabel.stringValue = "\(scanError)"
+            return
+        }
 
         if offenders.isEmpty {
             statusLabel.stringValue = "No active sound sources."
@@ -1312,7 +1363,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         statusLabel.stringValue = "\(offenders.count) sound source\(offenders.count == 1 ? "" : "s")"
         statusLabel.textColor = stfuRed()
         if needsAccessibility {
-            hintLabel.stringValue = "A browser source needs Accessibility for this STFU build. If STFU already looks enabled, toggle it off and on once."
+            hintLabel.stringValue = "Enable STFU in Accessibility settings, then refresh. If it already looks enabled, toggle it off and on once."
         } else {
             hintLabel.stringValue = ""
         }
@@ -1527,7 +1578,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     }
 
     private func closeNextOffender(allowedKeys: Set<String>, attempted: Set<String>) {
-        let current = soundOffenders().filter { offender in
+        let current = ((try? soundOffenders()) ?? []).filter { offender in
             isClosable(offender) && allowedKeys.contains(closeKey(for: offender))
         }
         guard let offender = current.first(where: { !attempted.contains(closeKey(for: $0)) }) else {
@@ -1548,8 +1599,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         switch offender.kind {
         case let .safariTab(pid):
             return "safari:\(pid)"
-        case let .chromiumTab(appName, app, _, _):
-            return "chromium:\(appName):\(app.processIdentifier):\(offender.name):\(offender.detail)"
+        case let .chromiumTab(appName, app, window, tab):
+            return "chromium:\(appName):\(app.processIdentifier):\(CFHash(window)):\(CFHash(tab))"
         case let .unresolvedBrowser(appName, app):
             return "unresolved:\(appName):\(app.processIdentifier)"
         case let .app(process):
@@ -1567,7 +1618,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
         let alert = NSAlert()
         alert.messageText = "Quit \(offender.name)?"
-        alert.informativeText = "STFU will quit this app to stop its audio."
+        alert.informativeText = "STFU will ask this app to quit, and may terminate its audio process if it does not respond. Unsaved work in that app could be lost."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit App")
         alert.addButton(withTitle: "Cancel")
@@ -1587,7 +1638,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
         let alert = NSAlert()
         alert.messageText = "STFU everything?"
-        alert.informativeText = "This will close browser tabs and quit apps currently producing sound: \(visibleNames)\(suffix)."
+        alert.informativeText = "This will close browser tabs and quit apps currently producing sound. App quits may terminate audio processes and unsaved work could be lost: \(visibleNames)\(suffix)."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "STFU Everything")
         alert.addButton(withTitle: "Cancel")
@@ -1604,11 +1655,14 @@ func shouldRunSetupApp() -> Bool {
         && isatty(STDOUT_FILENO) == 0
 }
 
+private var setupAppDelegate: SetupAppDelegate?
+
 @MainActor
 func runSetupApp() {
     let app = NSApplication.shared
-    let delegate = SetupAppDelegate()
-    app.delegate = delegate
+    setupAppDelegate = SetupAppDelegate()
+    app.delegate = setupAppDelegate
+    setupAppDelegate?.start()
     app.run()
 }
 

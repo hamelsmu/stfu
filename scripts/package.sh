@@ -15,9 +15,6 @@ SCRIPTS_DIR="$WORK_DIR/scripts"
 DMG_ROOT="$WORK_DIR/dmg-root"
 ICON_PATH="$WORK_DIR/STFU.icns"
 DEFAULT_ARTWORK_PATH="$ROOT/assets/pulpfiction_new.webp"
-if [[ ! -f "$DEFAULT_ARTWORK_PATH" ]]; then
-  DEFAULT_ARTWORK_PATH="$HOME/Downloads/pulpfiction_new.webp"
-fi
 ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
 APP_BUNDLE="$PAYLOAD_DIR/Applications/$APP_NAME.app"
 PKG_PATH="$DIST_DIR/STFU-$VERSION.pkg"

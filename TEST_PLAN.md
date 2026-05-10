@@ -191,7 +191,7 @@ Inspect the app at these window sizes:
 
 Check:
 
-- Header uses the Pulp-style artwork as the main visual and keeps Samuel visible.
+- Header uses the configured artwork as the main visual and keeps the subject visible.
 - STFU icon uses only the artwork plus large white `STFU` text, is recognizable at Dock/Finder sizes, and is not blurry.
 - Black/white artwork treatment remains readable in both Dark Mode and Light Mode.
 - Status text is funny but still clear.
@@ -206,11 +206,20 @@ Check:
 
 ## Permission State Tests
 
+Clean first run from the DMG:
+
+- Install STFU from the DMG/pkg into `/Applications`.
+- Launch `/Applications/STFU.app` before granting permissions.
+- Start one browser fixture and one app audio source.
+- Browser rows should explain the missing permission and offer `Open Settings`; app rows should still be visible.
+- Grant Accessibility, refresh, then allow any macOS Automation prompt when using `Go to Tab` or `Close Tab`.
+- If Automation is denied for Safari, STFU should show Safari as a browser permission/unresolved row and must not offer `Quit App`.
+
 Run with Accessibility disabled for STFU:
 
 - App should still open.
-- Chrome row should say STFU needs Accessibility access to identify the noisy tab.
-- Chrome row should show `Open Settings`, not `Quit App`.
+- Browser row should say STFU needs Accessibility access to identify noisy tabs.
+- Browser row should show `Open Settings`, not `Quit App`.
 - Non-browser audio sources should still be listed.
 - `stfu --doctor` should clearly report missing Accessibility permission.
 

@@ -13,5 +13,6 @@
 
 - Use `just build`, `just package`, and `just verify` for local checks. `scripts/verify.sh` rebuilds artifacts by default; pass `VERIFY_EXISTING=1` only after a fresh package step.
 - Use `VERSION=x.y.z just release` as the local GitHub Release path. The GitHub Actions workflow builds and uploads CI artifacts only; it does not mutate releases.
+- Release packaging refuses the prototype artwork unless `ARTWORK_PATH` points at cleared artwork or `ALLOW_PROTOTYPE_ARTWORK=1` is set for a private/internal release.
 - Do not replace an existing tag unless the user explicitly wants that release replaced; then use `FORCE=1 VERSION=x.y.z just release`.
 - The default artwork is prototype user-provided artwork. Replace it before public redistribution unless the user confirms distribution rights.

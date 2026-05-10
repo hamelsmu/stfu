@@ -56,7 +56,9 @@ stfu --request-accessibility
 In the app:
 
 - `Go to Tab` / `Go to App`: jump to the noisy source.
-- `Close Tab` / `Quit App`: silence that source.
+- `Close Tab`: close only the noisy browser tab.
+- `Quit App`: asks before quitting the noisy app. Unsaved work in that app could be lost.
+- `STFU Everything`: asks before closing all noisy tabs and quitting noisy apps.
 - `Open Settings`: grant Accessibility when a browser needs it.
 - `Refresh`: rescan current audio sources.
 
@@ -109,7 +111,7 @@ Artifacts are written to:
 - `dist/STFU-$VERSION.pkg`
 - `dist/STFU-$VERSION.dmg`
 
-The default artwork is `assets/pulpfiction_new.webp`. To use different artwork:
+The default artwork is prototype user-provided art at `assets/pulpfiction_new.webp`. To use different artwork:
 
 ```sh
 ARTWORK_PATH=/path/to/image.webp scripts/package.sh
@@ -131,6 +133,18 @@ The local release script is the authoritative path for publishing a GitHub Relea
 
 ```sh
 VERSION=0.1.0 just release
+```
+
+Release publishing refuses the prototype artwork by default. Use cleared artwork:
+
+```sh
+ARTWORK_PATH=/path/to/cleared-art.webp VERSION=0.1.0 just release
+```
+
+For a private/internal release that intentionally uses the prototype artwork:
+
+```sh
+ALLOW_PROTOTYPE_ARTWORK=1 VERSION=0.1.0 just release
 ```
 
 If a tag already exists and you intentionally want to replace it:

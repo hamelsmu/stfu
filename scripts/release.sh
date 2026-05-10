@@ -9,6 +9,8 @@ DMG_PATH="$ROOT/dist/STFU-$VERSION.dmg"
 PKG_PATH="$ROOT/dist/STFU-$VERSION.pkg"
 NOTES_PATH="$ROOT/.build/release-notes-$VERSION.md"
 FORCE="${FORCE:-0}"
+DEFAULT_ARTWORK_PATH="$ROOT/assets/pulpfiction_new.webp"
+REQUESTED_ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
 
 cd "$ROOT"
 
@@ -22,6 +24,24 @@ if [[ -n "$(git status --short)" ]]; then
   echo "Working tree is dirty. Commit or stash changes before releasing." >&2
   exit 1
 fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI is required for release publishing." >&2
+  exit 1
+fi
+
+gh auth status --hostname github.com >/dev/null
+gh repo view "$REPO" --json name >/dev/null
+
+case "$REQUESTED_ARTWORK_PATH" in
+  "$DEFAULT_ARTWORK_PATH"|"$HOME/Downloads/pulpfiction_new.webp"|"assets/pulpfiction_new.webp"|*/pulpfiction_new.webp)
+    if [[ "${ALLOW_PROTOTYPE_ARTWORK:-0}" != "1" ]]; then
+      echo "Release would package prototype artwork that is not cleared for public redistribution." >&2
+      echo "Set ARTWORK_PATH to cleared artwork, or set ALLOW_PROTOTYPE_ARTWORK=1 for a private/internal release." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 if [[ "$FORCE" != "1" ]]; then
   if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
@@ -52,7 +72,7 @@ mkdir -p "$(dirname "$NOTES_PATH")"
 cat > "$NOTES_PATH" <<NOTES
 Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
 
-![STFU app screenshot](https://github.com/$REPO/raw/main/assets/screenshots/app-multiple-sources.png)
+![STFU app screenshot](https://github.com/$REPO/raw/$TAG/assets/screenshots/app-multiple-sources.png)
 
 Download:
 - \`STFU-$VERSION.dmg\` for the macOS installer disk image.
@@ -60,7 +80,7 @@ Download:
 Install:
 1. Open the DMG and run \`Install STFU.pkg\`.
 2. Open STFU.
-3. Grant Accessibility when prompted. macOS may also ask for browser Automation permission.
+3. If a browser row asks for Accessibility, click \`Open Settings\`, enable STFU, then refresh. macOS may also ask for browser Automation permission.
 
 Signing status:
 - This build is unsigned/ad-hoc signed, so Gatekeeper may require Control-click > Open.
