@@ -11,7 +11,12 @@ build:
 package:
     VERSION={{version}} scripts/package.sh
 
+# Build package artifacts, then verify the generated DMG/pkg.
 verify: package
+    VERIFY_EXISTING=1 VERSION={{version}} scripts/verify.sh
+
+# Verify existing artifacts after a fresh package step without rerunning scripts/package.sh.
+verify-existing:
     VERIFY_EXISTING=1 VERSION={{version}} scripts/verify.sh
 
 install-local: package

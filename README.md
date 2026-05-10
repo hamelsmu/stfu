@@ -100,6 +100,8 @@ scripts/package.sh
 scripts/verify.sh
 ```
 
+`just verify` builds package artifacts first, then verifies the generated DMG/pkg. `scripts/verify.sh` also runs unit tests and rebuilds artifacts by default; use `VERIFY_EXISTING=1` only after a fresh package step when you want to skip rerunning `scripts/package.sh`.
+
 Set `VERSION` when you want a different artifact name:
 
 ```sh
@@ -120,10 +122,11 @@ ARTWORK_PATH=/path/to/image.webp scripts/package.sh
 Verify local artifacts:
 
 ```sh
-VERSION=0.1.0
-hdiutil verify "dist/STFU-$VERSION.dmg"
-pkgutil --payload-files "dist/STFU-$VERSION.pkg"
+VERSION=0.1.0 scripts/verify.sh
+VERIFY_EXISTING=1 VERSION=0.1.0 scripts/verify.sh
 ```
+
+By default, signing and Gatekeeper checks are advisory so unsigned local builds can still be verified. Set `STRICT_SIGNING=1` for signed or notarized release candidates when those checks must pass.
 
 ## Publish a GitHub Release
 
@@ -132,6 +135,8 @@ The local release script is the authoritative path for publishing a GitHub Relea
 ```sh
 VERSION=0.1.0 just release
 ```
+
+For signed release candidates, include `STRICT_SIGNING=1` so the release check fails if Gatekeeper rejects the DMG or pkg.
 
 If a tag already exists and you intentionally want to replace it:
 

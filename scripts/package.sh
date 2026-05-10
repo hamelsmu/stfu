@@ -22,6 +22,14 @@ RAW_PKG_PATH="$WORK_DIR/STFU-$VERSION.raw.pkg"
 UNSIGNED_PKG_PATH="$WORK_DIR/STFU-$VERSION.unsigned.pkg"
 DMG_PATH="$DIST_DIR/STFU-$VERSION.dmg"
 
+clear_extended_attributes() {
+  local path="$1"
+
+  if command -v xattr >/dev/null 2>&1; then
+    find "$path" -depth -exec xattr -c {} + 2>/dev/null || true
+  fi
+}
+
 rm -rf "$WORK_DIR"
 mkdir -p \
   "$APP_BUNDLE/Contents/MacOS" \
@@ -90,13 +98,13 @@ POSTINSTALL
 chmod 755 "$SCRIPTS_DIR/postinstall"
 
 find "$PAYLOAD_DIR" -name '._*' -delete
-xattr -cr "$PAYLOAD_DIR" || true
+clear_extended_attributes "$PAYLOAD_DIR"
 
 APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
 codesign --force --deep --sign "$APP_SIGN_IDENTITY" "$APP_BUNDLE"
 
 find "$PAYLOAD_DIR" -name '._*' -delete
-xattr -cr "$PAYLOAD_DIR" || true
+clear_extended_attributes "$PAYLOAD_DIR"
 
 PKGBUILD_ARGS=(
   --root "$PAYLOAD_DIR"

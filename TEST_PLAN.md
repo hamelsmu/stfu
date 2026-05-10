@@ -34,10 +34,9 @@ Expected:
 
 ## Repeatable Audio Fixture
 
-For deterministic Chrome tests, serve the included audio fixture:
+For deterministic Chrome tests, serve the included audio fixture from the repository root:
 
 ```sh
-cd /Users/hamel/git/stfu
 python3 -m http.server 9876
 ```
 
@@ -236,6 +235,8 @@ Before release:
 VERSION=0.1.0
 VERSION="$VERSION" scripts/verify.sh
 ```
+
+This rebuilds package artifacts before verification and now runs the unit test suite first. For signed release candidates, add `STRICT_SIGNING=1` so Gatekeeper rejection fails the check.
 
 Then:
 
