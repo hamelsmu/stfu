@@ -1224,8 +1224,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         tableView.delegate = self
         tableView.dataSource = self
         tableView.headerView = nil
-        tableView.rowHeight = 56
-        tableView.intercellSpacing = NSSize(width: 0, height: 8)
+        tableView.rowHeight = 58
+        tableView.intercellSpacing = NSSize(width: 0, height: 4)
         tableView.target = self
         tableView.doubleAction = #selector(focusSelected)
         tableView.usesAlternatingRowBackgroundColors = false
@@ -1336,6 +1336,10 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         button.contentTintColor = color
         button.tag = row
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.heightAnchor.constraint(equalToConstant: 30)
+        ])
         return button
     }
 
@@ -1346,12 +1350,15 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         let offender = offenders[row]
 
         if identifier.rawValue == "action" {
+            let container = NSView()
+            container.translatesAutoresizingMaskIntoConstraints = false
+
             let stack = NSStackView()
             stack.orientation = .horizontal
             stack.alignment = .centerY
             stack.spacing = 8
             stack.distribution = .fillEqually
-            stack.edgeInsets = NSEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+            stack.translatesAutoresizingMaskIntoConstraints = false
 
             if let title = focusTitle(for: offender) {
                 stack.addArrangedSubview(rowButton(
@@ -1371,7 +1378,14 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
                 ))
             }
 
-            return stack
+            container.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+                stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 10),
+                stack.widthAnchor.constraint(lessThanOrEqualToConstant: 320)
+            ])
+            return container
         }
 
         let text: String
@@ -1379,20 +1393,31 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         let color: NSColor
         if identifier.rawValue == "offender" {
             text = offender.name
-            font = .systemFont(ofSize: 14, weight: .semibold)
+            font = .systemFont(ofSize: 15, weight: .semibold)
             color = stfuYellow()
         } else {
             text = offender.detail
-            font = .systemFont(ofSize: 12, weight: .regular)
+            font = .systemFont(ofSize: 13, weight: .regular)
             color = NSColor(calibratedWhite: 0.82, alpha: 1)
         }
 
-        let field = NSTextField(wrappingLabelWithString: text)
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let field = NSTextField(labelWithString: text)
         field.font = font
         field.textColor = color
         field.lineBreakMode = .byTruncatingTail
-        field.maximumNumberOfLines = identifier.rawValue == "offender" ? 2 : 3
-        return field
+        field.maximumNumberOfLines = 1
+        field.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+        return container
     }
 
     private func selectedOffender() -> SoundOffender? {
