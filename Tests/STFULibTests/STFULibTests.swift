@@ -75,6 +75,68 @@ final class STFULibTests: XCTestCase {
         XCTAssertFalse(isAutomationDenied(CommandResult(status: 0, output: "1", error: "")))
     }
 
+    func testMenuBarStatusCopyAndSymbols() {
+        XCTAssertEqual(menuBarPrimaryLine(sourceCount: 0, isScanning: true, hasError: false), "Scanning...")
+        XCTAssertEqual(menuBarPrimaryLine(sourceCount: 0, isScanning: false, hasError: false), "All quiet")
+        XCTAssertEqual(menuBarPrimaryLine(sourceCount: 1, isScanning: false, hasError: false), "1 sound source")
+        XCTAssertEqual(menuBarPrimaryLine(sourceCount: 3, isScanning: false, hasError: false), "3 sound sources")
+        XCTAssertEqual(menuBarPrimaryLine(sourceCount: 1, isScanning: false, hasError: true), "Could not read sound sources")
+
+        XCTAssertEqual(menuBarStatusSystemImage(sourceCount: 0, isScanning: true, hasError: false), "waveform")
+        XCTAssertEqual(menuBarStatusSystemImage(sourceCount: 0, isScanning: false, hasError: false), "speaker.slash.fill")
+        XCTAssertEqual(menuBarStatusSystemImage(sourceCount: 2, isScanning: false, hasError: false), "speaker.wave.2.fill")
+        XCTAssertEqual(menuBarStatusSystemImage(sourceCount: 2, isScanning: false, hasError: true), "exclamationmark.triangle.fill")
+    }
+
+    func testMenuBarRowActionsMatchOffenderKind() {
+        let app = appOffender()
+        let chromium = SoundOffender(
+            name: "Google Chrome Tab 2",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 2, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+        let blockedAccessibility = SoundOffender(
+            name: "Google Chrome",
+            detail: "Needs Accessibility to identify noisy browser tabs.",
+            kind: .blockedBrowser(appName: "Google Chrome", bundleID: "com.google.Chrome")
+        )
+        let blockedAutomation = SoundOffender(
+            name: "Safari",
+            detail: "Needs Automation permission to identify noisy Safari tabs.",
+            kind: .blockedAutomation(BrowserAppSnapshot(name: "Safari", bundleID: "com.apple.Safari", pid: 99))
+        )
+        let unresolved = SoundOffender(
+            name: "Google Chrome",
+            detail: "Audio detected, but no matching tab was found.",
+            kind: .unresolvedBrowser(BrowserAppSnapshot(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 42))
+        )
+
+        XCTAssertEqual(menuBarFocusActionTitle(for: chromium), "Go to Tab")
+        XCTAssertEqual(menuBarCloseActionTitle(for: chromium), "Close Tab")
+        XCTAssertEqual(menuBarFocusActionTitle(for: app), "Go to App")
+        XCTAssertEqual(menuBarCloseActionTitle(for: app), "Quit App")
+        XCTAssertNil(menuBarFocusActionTitle(for: blockedAccessibility))
+        XCTAssertEqual(menuBarCloseActionTitle(for: blockedAccessibility), "Open Settings")
+        XCTAssertNil(menuBarFocusActionTitle(for: blockedAutomation))
+        XCTAssertEqual(menuBarCloseActionTitle(for: blockedAutomation), "Open Settings")
+        XCTAssertEqual(menuBarFocusActionTitle(for: unresolved), "Go to App")
+        XCTAssertNil(menuBarCloseActionTitle(for: unresolved))
+    }
+
+    func testMenuBarConfirmationRules() {
+        let app = appOffender()
+        let chromium = SoundOffender(
+            name: "Google Chrome Tab 2",
+            detail: "Example Video",
+            kind: .chromiumTab(chromeSnapshot(tabIndex: 2, title: "Example Video", label: "Example Video - Audio playing"))
+        )
+
+        XCTAssertTrue(menuBarNeedsDestructiveConfirmation(for: app))
+        XCTAssertFalse(menuBarNeedsDestructiveConfirmation(for: chromium))
+        XCTAssertFalse(menuBarNeedsCloseAllConfirmation(closableCount: 0))
+        XCTAssertTrue(menuBarNeedsCloseAllConfirmation(closableCount: 1))
+    }
+
     func testCloseKeyUsesStableValueIdentity() {
         let offender = SoundOffender(
             name: "Google Chrome Tab 2",
@@ -176,6 +238,19 @@ final class STFULibTests: XCTestCase {
             tabIndex: tabIndex,
             title: title,
             label: label
+        )
+    }
+
+    private func appOffender() -> SoundOffender {
+        SoundOffender(
+            name: "Music",
+            detail: "App audio source",
+            kind: .app(AudioProcess(
+                objectID: AudioObjectID(10),
+                pid: 24,
+                bundleID: "com.apple.Music",
+                name: "Music"
+            ))
         )
     }
 }

@@ -4,6 +4,8 @@ Find the Mac app or browser tab making sound. Close that tab, quit that app, or 
 
 ![STFU showing multiple sound sources](assets/screenshots/app-multiple-sources.png)
 
+![STFU menu bar showing multiple sound sources](assets/screenshots/menu-multiple-sources.png)
+
 For the stray video, song, or mystery tab you can hear but cannot find.
 
 - Browser tab making noise: close only that tab.
@@ -65,6 +67,13 @@ In the app:
 - `STFU Everything`: asks before closing all noisy tabs and quitting noisy apps.
 - `Open Settings`: open the relevant Accessibility or Automation permission page.
 - `Refresh`: rescan current audio sources.
+
+In the menu bar:
+
+- Open `STFU.app`.
+- Use the STFU menu bar item to see current sound sources.
+- Use row icons to jump to a source, close a noisy tab, open permission settings, or confirm quitting a noisy app.
+- Use `Open STFU` when you want the full window.
 
 From Terminal:
 

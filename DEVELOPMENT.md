@@ -38,6 +38,11 @@ Artifacts are written to:
 - `dist/STFU-$VERSION.pkg`
 - `dist/STFU-$VERSION.dmg`
 
+The installer payload contains:
+
+- `/Applications/STFU.app`
+- `/usr/local/bin/stfu`
+
 Verify local artifacts:
 
 ```sh
@@ -79,3 +84,5 @@ scripts/package.sh
 ```
 
 Developer ID app builds are signed with hardened runtime and the Apple Events entitlement STFU needs for browser control.
+
+`STFU.app` owns both the full window and menu bar item under the same bundle identifier, `dev.hamel.stfu`. macOS Accessibility and Automation permissions should show a single `STFU` entry.

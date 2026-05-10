@@ -1662,6 +1662,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     private var offenders: [SoundOffender] = []
     private var scanError: Error?
     private var scanGeneration = 0
+    private var menuBarController: STFUMenuBarController?
+    private var showWindowObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
@@ -1669,15 +1671,41 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
     func start() {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate()
+        if menuBarController == nil {
+            menuBarController = STFUMenuBarController()
+        }
+        if showWindowObserver == nil {
+            showWindowObserver = NotificationCenter.default.addObserver(
+                forName: .stfuShowMainWindow,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.showMainWindow(activate: true)
+                }
+            }
+        }
+        showMainWindow(activate: true)
+    }
+
+    private func showMainWindow(activate: Bool) {
+        if activate {
+            NSApp.activate()
+        }
         if window == nil {
             buildWindow()
         }
+        window?.makeKeyAndOrderFront(nil)
         refreshStatus()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow(activate: true)
+        return true
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -1690,13 +1718,14 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "STFU"
-        window.minSize = NSSize(width: 840, height: 560)
+        window.minSize = NSSize(width: 860, height: 620)
+        window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.backgroundColor = stfuCanvas()
         window.center()
@@ -1752,9 +1781,9 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             heroView.topAnchor.constraint(equalTo: content.topAnchor),
             heroView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             heroView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            heroView.heightAnchor.constraint(equalToConstant: 255),
+            heroView.heightAnchor.constraint(equalToConstant: 220),
 
-            statusLabel.topAnchor.constraint(equalTo: heroView.bottomAnchor, constant: 20),
+            statusLabel.topAnchor.constraint(equalTo: heroView.bottomAnchor, constant: 16),
             statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
 
@@ -1762,10 +1791,10 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             hintLabel.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
             hintLabel.trailingAnchor.constraint(equalTo: statusLabel.trailingAnchor),
 
-            listBackgroundView.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 18),
+            listBackgroundView.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 14),
             listBackgroundView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             listBackgroundView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
-            listBackgroundView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -18),
+            listBackgroundView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -16),
 
             scrollView.topAnchor.constraint(equalTo: listBackgroundView.topAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: listBackgroundView.leadingAnchor, constant: 8),
@@ -1779,7 +1808,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
 
             buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             buttons.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -30),
-            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -22)
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20)
         ])
 
         self.window = window
@@ -1790,7 +1819,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         tableView.delegate = self
         tableView.dataSource = self
         tableView.headerView = nil
-        tableView.rowHeight = 62
+        tableView.rowHeight = 58
         tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.target = self
         tableView.doubleAction = #selector(focusSelected)

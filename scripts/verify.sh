@@ -29,6 +29,24 @@ if pkgutil --payload-files "$PKG_PATH" | grep --color=never -E '(^|/)\._[^/]*$';
   exit 1
 fi
 
+payload_files="$(pkgutil --payload-files "$PKG_PATH")"
+required_payload_files=(
+  "./Applications/STFU.app/Contents/MacOS/stfu"
+  "./usr/local/bin/stfu"
+)
+
+for required in "${required_payload_files[@]}"; do
+  if ! grep -Fxq "$required" <<<"$payload_files"; then
+    echo "Package payload is missing $required." >&2
+    exit 1
+  fi
+done
+
+if grep -Fq "./Applications/STFU Menu.app" <<<"$payload_files"; then
+  echo "Package payload should not include the old separate STFU Menu.app bundle." >&2
+  exit 1
+fi
+
 shasum -a 256 "$DMG_PATH" "$PKG_PATH"
 
 if [[ "${STRICT_SIGNING:-0}" == "1" ]]; then

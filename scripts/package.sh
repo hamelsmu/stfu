@@ -94,6 +94,7 @@ chmod 755 "$PAYLOAD_DIR/usr/local/bin/stfu"
 
 cat > "$SCRIPTS_DIR/postinstall" <<'POSTINSTALL'
 #!/bin/sh
+rm -rf "/Applications/STFU Menu.app"
 exit 0
 POSTINSTALL
 chmod 755 "$SCRIPTS_DIR/postinstall"

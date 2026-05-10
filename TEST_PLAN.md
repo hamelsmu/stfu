@@ -9,9 +9,11 @@ This plan assumes STFU has already been built, installed from the DMG/pkg, and i
 
 - Use the `@Chrome` plugin for Chrome scenarios. These tests must run against the user's real Chrome browser because STFU depends on macOS CoreAudio and Accessibility seeing real Chrome windows and tabs.
 - Use the `@Computer` / Computer Use plugin for STFU app UI inspection and row-level clicking.
+- Test the STFU menu bar item with Computer Use as part of `/Applications/STFU.app`.
 - Do not use Playwright or the in-app browser as a substitute for these scenarios. If either required plugin is unavailable, record that as a blocker.
 - The Chrome fixture is intentionally near-silent. Clean up Chrome test tabs and local fixture servers immediately after each scenario.
 - For GUI permission tests, launch `/Applications/STFU.app`, not `.build/installer/payload/Applications/STFU.app`.
+- The full window and menu bar item share one TCC identity. Accessibility settings should show `STFU`, not a separate menu app entry.
 
 ## Baseline Setup
 
@@ -31,6 +33,7 @@ Expected:
 - Accessibility permission is granted.
 - Chrome Accessibility inspection works when Chrome is running.
 - The app opens without warnings, layout clipping, or unreadable text.
+- The STFU menu bar item appears while `STFU.app` is running.
 
 ## Repeatable Audio Fixture
 
@@ -204,6 +207,23 @@ Check:
 - Table remains usable with at least 5 rows.
 - Keyboard focus and double-click behavior feel predictable.
 
+## Menu Bar Inspection
+
+Open `/Applications/STFU.app`.
+
+Check:
+
+- The menu bar item appears and opens a compact panel.
+- The header shows source count and last updated time.
+- Timer refreshes do not visibly churn the panel.
+- Row icon buttons have clear tooltips.
+- Browser tab rows offer `Go to Tab` and `Close Tab`.
+- App rows offer `Go to App` and confirm before `Quit App`.
+- Blocked Accessibility or Automation rows offer settings, not quit.
+- `STFU Everything` appears only when there are multiple closable sources and confirms inline.
+- `Open STFU` brings the full app window forward.
+- The menu bar item uses the same Accessibility identity as the full app.
+
 ## Permission State Tests
 
 Clean first run from the DMG:
@@ -244,7 +264,7 @@ Then:
 - Confirm `/Applications/STFU.app` launches.
 - Confirm `/usr/local/bin/stfu --doctor` works.
 - Confirm `STFU.app` is the app shown in Accessibility settings.
-- Confirm the installed CLI and app both use the same permission identity.
+- Confirm no separate `STFU Menu` app appears in Accessibility settings.
 
 ## Cleanup
 

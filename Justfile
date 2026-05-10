@@ -19,9 +19,13 @@ verify-existing:
 
 install-local: package
     ditto .build/installer/payload/Applications/STFU.app /Applications/STFU.app
+    rm -rf "/Applications/STFU Menu.app"
     install -m 755 .build/installer/payload/usr/local/bin/stfu /usr/local/bin/stfu
 
 open:
+    open -a /Applications/STFU.app
+
+open-menu:
     open -a /Applications/STFU.app
 
 doctor:
