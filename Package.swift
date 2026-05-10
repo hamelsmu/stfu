@@ -10,13 +10,17 @@ let package = Package(
         .executable(name: "stfu", targets: ["stfu"])
     ],
     targets: [
-        .executableTarget(
-            name: "stfu",
+        .target(
+            name: "STFULib",
             linkerSettings: [
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("AppKit")
             ]
+        ),
+        .executableTarget(
+            name: "stfu",
+            dependencies: ["STFULib"]
         )
     ]
 )
