@@ -344,7 +344,7 @@ func parentPID(of pid: pid_t) -> pid_t? {
     return pid_t(trimmed)
 }
 
-func runningChromiumApplication(for process: AudioProcess, bundleID: String) -> NSRunningApplication? {
+func chromiumAncestorApplication(for process: AudioProcess, bundleID: String) -> NSRunningApplication? {
     var pid = process.pid
     for _ in 0..<12 {
         if let app = NSRunningApplication(processIdentifier: pid),
@@ -358,6 +358,13 @@ func runningChromiumApplication(for process: AudioProcess, bundleID: String) -> 
         pid = parent
     }
 
+    return nil
+}
+
+func runningChromiumApplication(for process: AudioProcess, bundleID: String) -> NSRunningApplication? {
+    if let app = chromiumAncestorApplication(for: process, bundleID: bundleID) {
+        return app
+    }
     return runningApplication(bundleID: bundleID)
 }
 
@@ -500,6 +507,7 @@ func isTabLikeAXElement(_ element: AXUIElement) -> Bool {
 
 struct AXAudibleTab {
     let element: AXUIElement
+    let window: AXUIElement
     let label: String
     let title: String
     let index: Int?
@@ -555,6 +563,7 @@ func findAudibleTabs(in root: AXUIElement, verbose: Bool) -> [AXAudibleTab] {
                 if seenTabs.insert(tabID).inserted {
                     matches.append(AXAudibleTab(
                         element: tab,
+                        window: root,
                         label: label,
                         title: tabTitle(from: label),
                         index: tabIndex(tab)
@@ -565,6 +574,7 @@ func findAudibleTabs(in root: AXUIElement, verbose: Bool) -> [AXAudibleTab] {
                 if seenTabs.insert(tabID).inserted {
                     matches.append(AXAudibleTab(
                         element: current.element,
+                        window: root,
                         label: text,
                         title: tabTitle(from: text),
                         index: tabIndex(current.element)
@@ -659,11 +669,9 @@ func closeChromiumAudibleTabWithAccessibility(
     return false
 }
 
-func focusChromiumTab(app: NSRunningApplication, tab: AXUIElement) -> Bool {
+func focusChromiumTab(app: NSRunningApplication, window: AXUIElement, tab: AXUIElement) -> Bool {
     app.activate()
-    if let window = axWindows(AXUIElementCreateApplication(app.processIdentifier)).first {
-        _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-    }
+    _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
     return AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
 }
 
@@ -677,13 +685,10 @@ func audibleChromiumTabs(app: NSRunningApplication, verbose: Bool = false) -> [A
 }
 
 func isChromiumRelated(_ process: AudioProcess, appBundleID: String) -> Bool {
-    if process.bundleID == appBundleID {
+    if process.bundleID == appBundleID || process.bundleID?.hasPrefix(appBundleID + ".") == true {
         return true
     }
-    guard let bundleID = process.bundleID else {
-        return false
-    }
-    return bundleID.hasPrefix(appBundleID + ".") || bundleID.lowercased().contains("chrom")
+    return chromiumAncestorApplication(for: process, bundleID: appBundleID) != nil
 }
 
 func matchesBundleFilter(_ process: AudioProcess, filter: String) -> Bool {
@@ -964,7 +969,7 @@ final class STFUPulpHeroView: NSView {
 
 enum OffenderKind {
     case safariTab(pid_t)
-    case chromiumTab(appName: String, app: NSRunningApplication, tab: AXUIElement)
+    case chromiumTab(appName: String, app: NSRunningApplication, window: AXUIElement, tab: AXUIElement)
     case unresolvedBrowser(appName: String, app: NSRunningApplication)
     case app(AudioProcess)
     case blockedBrowser(appName: String)
@@ -975,20 +980,17 @@ final class SoundOffender {
     let name: String
     let detail: String
     let kind: OffenderKind
-    let buttonTitle: String
 
-    init(name: String, detail: String, kind: OffenderKind, buttonTitle: String = "STFU") {
+    init(name: String, detail: String, kind: OffenderKind) {
         self.name = name
         self.detail = detail
         self.kind = kind
-        self.buttonTitle = buttonTitle
     }
 }
 
 func soundOffenders() -> [SoundOffender] {
     let processes = (try? outputAudioProcesses()) ?? []
     var offenders: [SoundOffender] = []
-    var handledPIDs = Set<pid_t>()
     var handledBrowserApps = Set<pid_t>()
 
     for process in processes {
@@ -999,7 +1001,6 @@ func soundOffenders() -> [SoundOffender] {
                 detail: "\(safari.title)\(safari.url.isEmpty ? "" : " - \(safari.url)")",
                 kind: .safariTab(process.pid)
             ))
-            handledPIDs.insert(process.pid)
             continue
         }
 
@@ -1027,19 +1028,22 @@ func soundOffenders() -> [SoundOffender] {
                         offenders.append(SoundOffender(
                             name: "\(chromium.name) \(tabNumber)",
                             detail: tab.title.isEmpty ? tab.label : tab.title,
-                            kind: .chromiumTab(appName: chromium.name, app: app, tab: tab.element)
+                            kind: .chromiumTab(
+                                appName: chromium.name,
+                                app: app,
+                                window: tab.window,
+                                tab: tab.element
+                            )
                         ))
                     }
                 }
             } else {
                 offenders.append(SoundOffender(
                     name: chromium.name,
-                    detail: "Needs Accessibility for this STFU build to identify the noisy tab.",
-                    kind: .blockedBrowser(appName: chromium.name),
-                    buttonTitle: "Open Settings"
+                    detail: "Needs Accessibility for this STFU build.",
+                    kind: .blockedBrowser(appName: chromium.name)
                 ))
             }
-            handledPIDs.insert(process.pid)
         }
 
         if matchedChromium {
@@ -1049,10 +1053,8 @@ func soundOffenders() -> [SoundOffender] {
         offenders.append(SoundOffender(
             name: process.name,
             detail: "\(process.bundleID ?? "pid \(process.pid)")",
-            kind: .app(process),
-            buttonTitle: "Quit App"
+            kind: .app(process)
         ))
-        handledPIDs.insert(process.pid)
     }
 
     return offenders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -1063,8 +1065,8 @@ func focusOffender(_ offender: SoundOffender) -> Bool {
     switch offender.kind {
     case let .safariTab(pid):
         return focusSafariTab(pid: pid)
-    case let .chromiumTab(_, app, tab):
-        return focusChromiumTab(app: app, tab: tab)
+    case let .chromiumTab(_, app, window, tab):
+        return focusChromiumTab(app: app, window: window, tab: tab)
     case let .unresolvedBrowser(_, app):
         app.activate()
         return true
@@ -1085,8 +1087,8 @@ func closeOffender(_ offender: SoundOffender) -> Bool {
     switch offender.kind {
     case let .safariTab(pid):
         return closeSafariTab(pid: pid, dryRun: false)
-    case let .chromiumTab(appName, app, tab):
-        _ = focusChromiumTab(app: app, tab: tab)
+    case let .chromiumTab(appName, app, window, tab):
+        _ = focusChromiumTab(app: app, window: window, tab: tab)
         usleep(150_000)
         return closeActiveChromiumTab(appName: appName, app: app, label: offender.detail)
     case .unresolvedBrowser:
@@ -1104,7 +1106,6 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
     private var window: NSWindow?
     private let statusLabel = NSTextField(labelWithString: "Scanning the noise suspects...")
     private let hintLabel = NSTextField(wrappingLabelWithString: "")
-    private let doctorOutput = NSTextField(wrappingLabelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
     private let emptyLabel = NSTextField(labelWithString: "Blessed silence. Nobody is yapping right now.")
@@ -1177,11 +1178,6 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         buttons.spacing = 10
         buttons.distribution = .gravityAreas
         buttons.translatesAutoresizingMaskIntoConstraints = false
-
-        doctorOutput.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        doctorOutput.textColor = NSColor(calibratedWhite: 0.72, alpha: 1)
-        doctorOutput.maximumNumberOfLines = 5
-        doctorOutput.translatesAutoresizingMaskIntoConstraints = false
 
         for view in [heroView, statusLabel, hintLabel, scrollView, emptyLabel, buttons] {
             content.addSubview(view)
@@ -1428,20 +1424,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         return offenders[row]
     }
 
-    @objc private func requestPermission() {
-        _ = accessibilityTrusted(prompt: true)
-        openAccessibilitySettings()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.refreshStatus()
-        }
-    }
-
-    @objc private func openSettings() {
-        openAccessibilitySettings()
-    }
-
     @objc private func refreshAction() {
-        doctorOutput.stringValue = ""
         refreshStatus()
     }
 
@@ -1451,17 +1434,6 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
             return
         }
         _ = focusOffender(offender)
-    }
-
-    @objc private func closeSelected() {
-        guard let offender = selectedOffender() else {
-            NSSound.beep()
-            return
-        }
-        _ = closeOffender(offender)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.refreshStatus()
-        }
     }
 
     @objc private func focusRowButton(_ sender: NSButton) {
@@ -1496,12 +1468,6 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         }
     }
 
-    @objc private func runDoctorAction() {
-        let result = runCommand(Bundle.main.executablePath ?? CommandLine.arguments[0], ["--doctor"])
-        doctorOutput.stringValue = (result.output + result.error)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        refreshStatus()
-    }
 }
 
 func shouldRunSetupApp() -> Bool {

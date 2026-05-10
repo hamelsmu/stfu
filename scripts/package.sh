@@ -21,6 +21,8 @@ fi
 ARTWORK_PATH="${ARTWORK_PATH:-$DEFAULT_ARTWORK_PATH}"
 APP_BUNDLE="$PAYLOAD_DIR/Applications/$APP_NAME.app"
 PKG_PATH="$DIST_DIR/STFU-$VERSION.pkg"
+RAW_PKG_PATH="$WORK_DIR/STFU-$VERSION.raw.pkg"
+UNSIGNED_PKG_PATH="$WORK_DIR/STFU-$VERSION.unsigned.pkg"
 DMG_PATH="$DIST_DIR/STFU-$VERSION.dmg"
 
 rm -rf "$WORK_DIR"
@@ -97,6 +99,9 @@ xattr -cr "$PAYLOAD_DIR" || true
 APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
 codesign --force --deep --sign "$APP_SIGN_IDENTITY" "$APP_BUNDLE"
 
+find "$PAYLOAD_DIR" -name '._*' -delete
+xattr -cr "$PAYLOAD_DIR" || true
+
 PKGBUILD_ARGS=(
   --root "$PAYLOAD_DIR"
   --scripts "$SCRIPTS_DIR"
@@ -109,11 +114,36 @@ PKGBUILD_ARGS=(
   --filter '(^|/)\._[^/]*$'
 )
 
+pkgbuild "${PKGBUILD_ARGS[@]}" "$RAW_PKG_PATH"
+
+NORMALIZED_PKG_DIR="$WORK_DIR/normalized-pkg"
+rm -rf "$NORMALIZED_PKG_DIR"
+mkdir -p "$NORMALIZED_PKG_DIR"
+(
+  cd "$NORMALIZED_PKG_DIR"
+  xar -xf "$RAW_PKG_PATH"
+)
+mkbom "$PAYLOAD_DIR" "$NORMALIZED_PKG_DIR/Bom"
+(
+  cd "$PAYLOAD_DIR"
+  find . ! -name '._*' -print | LC_ALL=C sort | cpio -o --format odc 2>/dev/null | gzip -c > "$NORMALIZED_PKG_DIR/Payload"
+)
+rm -f "$UNSIGNED_PKG_PATH" "$PKG_PATH"
+(
+  cd "$NORMALIZED_PKG_DIR"
+  xar --compression none -cf "$UNSIGNED_PKG_PATH" Bom PackageInfo Payload Scripts
+)
+
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-  PKGBUILD_ARGS+=(--sign "$SIGN_IDENTITY")
+  productsign --sign "$SIGN_IDENTITY" "$UNSIGNED_PKG_PATH" "$PKG_PATH"
+else
+  cp "$UNSIGNED_PKG_PATH" "$PKG_PATH"
 fi
 
-pkgbuild "${PKGBUILD_ARGS[@]}" "$PKG_PATH"
+if pkgutil --payload-files "$PKG_PATH" | grep --color=never -E '(^|/)\._[^/]*$'; then
+  echo "Package payload contains AppleDouble metadata files." >&2
+  exit 1
+fi
 
 cp "$PKG_PATH" "$DMG_ROOT/Install STFU.pkg"
 cp "$ICON_PATH" "$DMG_ROOT/.VolumeIcon.icns"
