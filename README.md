@@ -2,12 +2,6 @@
 
 ![STFU social card: Mystery sound? Find the noisy tab or app.](assets/social-card.png)
 
-Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
-
-![STFU showing multiple sound sources](assets/screenshots/app-multiple-sources.png)
-
-![STFU menu bar showing multiple sound sources](assets/screenshots/menu-multiple-sources.png)
-
 For the stray video, song, or mystery tab you can hear but cannot find.
 
 - Browser tab making noise: close only that tab.
