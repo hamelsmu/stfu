@@ -1282,35 +1282,35 @@ func runDoctor() {
 }
 
 func stfuYellow() -> NSColor {
-    NSColor(calibratedRed: 0.98, green: 0.78, blue: 0.18, alpha: 1)
+    NSColor(calibratedRed: 0.74, green: 0.60, blue: 0.38, alpha: 1)
 }
 
 func stfuRed() -> NSColor {
-    NSColor(calibratedRed: 0.95, green: 0.22, blue: 0.24, alpha: 1)
+    NSColor(calibratedRed: 0.92, green: 0.28, blue: 0.25, alpha: 1)
 }
 
 func stfuBlack() -> NSColor {
-    NSColor(calibratedRed: 0.055, green: 0.052, blue: 0.049, alpha: 1)
+    NSColor(calibratedRed: 0.055, green: 0.055, blue: 0.058, alpha: 1)
 }
 
 func stfuCanvas() -> NSColor {
-    NSColor(calibratedRed: 0.075, green: 0.072, blue: 0.068, alpha: 1)
+    NSColor(calibratedRed: 0.075, green: 0.075, blue: 0.080, alpha: 1)
 }
 
 func stfuPanel() -> NSColor {
-    NSColor(calibratedRed: 0.115, green: 0.108, blue: 0.102, alpha: 1)
+    NSColor(calibratedRed: 0.125, green: 0.124, blue: 0.128, alpha: 1)
 }
 
 func stfuRow() -> NSColor {
-    NSColor(calibratedRed: 0.145, green: 0.137, blue: 0.128, alpha: 1)
+    NSColor(calibratedRed: 0.170, green: 0.168, blue: 0.174, alpha: 1)
 }
 
 func stfuRowSelected() -> NSColor {
-    NSColor(calibratedRed: 0.28, green: 0.21, blue: 0.11, alpha: 1)
+    NSColor(calibratedRed: 0.205, green: 0.205, blue: 0.218, alpha: 1)
 }
 
 func stfuBorder() -> NSColor {
-    NSColor(calibratedWhite: 1, alpha: 0.10)
+    NSColor(calibratedWhite: 1, alpha: 0.13)
 }
 
 func stfuPrimaryText() -> NSColor {
@@ -1393,7 +1393,7 @@ final class STFUOffenderRowView: NSTableRowView {
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
         stfuRowSelected().setFill()
         path.fill()
-        stfuYellow().withAlphaComponent(0.45).setStroke()
+        stfuBorder().setStroke()
         path.lineWidth = 1
         path.stroke()
     }
@@ -2041,7 +2041,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSo
         if identifier.rawValue == "offender" {
             text = offender.name
             font = .systemFont(ofSize: 15, weight: .semibold)
-            color = stfuYellow()
+            color = stfuPrimaryText()
         } else {
             text = offender.detail
             font = .systemFont(ofSize: 13, weight: .regular)

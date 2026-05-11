@@ -1,5 +1,7 @@
 # STFU
 
+![STFU social card: Mystery sound? Find the noisy tab or app.](assets/social-card.png)
+
 Find the Mac app or browser tab making sound. Close that tab, quit that app, or silence everything.
 
 ![STFU showing multiple sound sources](assets/screenshots/app-multiple-sources.png)

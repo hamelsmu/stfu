@@ -128,7 +128,7 @@ final class STFUMenuBarController: NSObject, NSPopoverDelegate {
         let image = NSImage(systemSymbolName: model.statusSystemImage, accessibilityDescription: model.primaryLine)
         image?.isTemplate = true
         button.image = image?.withSymbolConfiguration(configuration)
-        button.contentTintColor = model.offenders.isEmpty ? stfuSecondaryText() : stfuYellow()
+        button.contentTintColor = model.offenders.isEmpty ? stfuSecondaryText() : stfuPrimaryText()
         button.toolTip = model.primaryLine
     }
 
@@ -372,7 +372,7 @@ struct STFUMenuBarPanel: View {
         HStack(spacing: 10) {
             Image(systemName: model.statusSystemImage)
                 .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(headerTint)
+                .foregroundStyle(headerIconTint)
                 .frame(width: 28, height: 28)
                 .background(Color(nsColor: stfuPanel()))
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -382,7 +382,7 @@ struct STFUMenuBarPanel: View {
                     .font(.system(size: 15, weight: .black))
                 Text(model.primaryLine)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(headerTint)
+                    .foregroundStyle(Color(nsColor: stfuSecondaryText()))
             }
 
             Spacer(minLength: 8)
@@ -416,7 +416,7 @@ struct STFUMenuBarPanel: View {
                     title: model.isScanning ? "Listening..." : "All quiet",
                     message: model.isScanning ? "Checking the usual suspects." : "No active sound sources.",
                     systemImage: model.statusSystemImage,
-                    tint: headerTint
+                    tint: headerIconTint
                 )
             } else {
                 ScrollView {
@@ -466,11 +466,11 @@ struct STFUMenuBarPanel: View {
         .controlSize(.small)
     }
 
-    private var headerTint: Color {
+    private var headerIconTint: Color {
         if model.scanError != nil {
             return Color(nsColor: stfuRed())
         }
-        return model.offenders.isEmpty ? Color(nsColor: stfuSecondaryText()) : Color(nsColor: stfuYellow())
+        return model.offenders.isEmpty ? Color(nsColor: stfuSecondaryText()) : Color(nsColor: stfuPrimaryText())
     }
 
     private var sourceListHeight: CGFloat {
@@ -503,11 +503,11 @@ struct STFUMenuBarPanel: View {
             .controlSize(.small)
         }
         .padding(12)
-        .background(Color(nsColor: stfuRowSelected()).opacity(0.65))
+        .background(Color(nsColor: stfuRowSelected()))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color(nsColor: stfuYellow()).opacity(0.35), lineWidth: 1)
+                .stroke(Color(nsColor: stfuBorder()), lineWidth: 1)
         )
     }
 
@@ -569,7 +569,7 @@ struct STFUMenuBarRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(offender.name)
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color(nsColor: stfuYellow()))
+                    .foregroundStyle(Color(nsColor: stfuPrimaryText()))
                     .lineLimit(1)
                 Text(offender.detail)
                     .font(.system(size: 12))
